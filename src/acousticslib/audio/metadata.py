@@ -1,16 +1,23 @@
 """WAV file metadata extraction.
 
 Reads recorder identity, timestamp, location and audio parameters from WAV files
-using three strategies in priority order:
+using four strategies in priority order:
 
 1. GUANO header (guano.GuanoFile) — preferred; covers all modern recorders.
-2. Filename pattern matching — covers Wildlife Acoustics (NT01-NT08), Titley
-   Chorus (NT11-NT15), BAR-LT (JEJL), and a generic YYYYMMDD_HHMMSS suffix.
-3. Hardcoded serial-number map — for known recorders that produce no GUANO
+2. wavinfo INFO chunk — covers FrontierLabs BAR-LT recorders that embed
+   start/end/location in the WAV title tag and the serial number in the album tag.
+3. Filename pattern matching — covers Wildlife Acoustics (NT01-NT08), Titley
+   Chorus (NT11-NT15), BAR-LT (JEJL, serial_YYYYMMDD, name_YYYYMMDD), and a
+   generic YYYYMMDD_HHMMSS suffix.
+4. Hardcoded serial-number map — for known recorders that produce no GUANO
    metadata and whose filenames do not embed a serial number.
 
 All timestamps are returned as tz-aware ``datetime`` objects localised to
 Australia/Hobart (via :func:`acousticslib.time_utils.localize_hobart`).
+
+Public parsing utilities (may also be called directly):
+    parse_bar_title_long   Parse a BAR-LT long-format WAV title tag
+    parse_bar_title_short  Parse a BAR-LT short-format filename
 
 Usage::
 
@@ -100,8 +107,127 @@ class WavMetadata:
         return f"{self.recorder_name}/{self.date_path}"
 
 
+def parse_bar_title_long(
+    title: str,
+) -> tuple[Optional[datetime], Optional[datetime], Optional[float], Optional[float]]:
+    """Parse a FrontierLabs BAR-LT long-format WAV title tag.
+
+    BAR-LT recorders write the recording window and GPS fix into the WAV INFO
+    title field, e.g.::
+
+        S20250403T190158.327009+1100_E20250403T194658.320872+1100_-41.09533+146.65492
+
+    The ``.wav`` extension is stripped if present before matching.
+
+    Args:
+        title: Raw title string from the WAV INFO chunk (or filename stem).
+
+    Returns:
+        ``(start, end, lat, lon)`` as tz-aware datetimes and floats, or
+        ``(None, None, None, None)`` if the string does not match.
+    """
+    pattern = (
+        r"S(?P<start>\d{8}T\d{6}\.\d{6}[+-]\d{4})_"
+        r"E(?P<end>\d{8}T\d{6}\.\d{6}[+-]\d{4})_"
+        r"(?P<lat>[+-]?\d+\.\d+)"
+        r"(?P<lon>[+-]?\d+\.\d+)"
+    )
+    m = re.match(pattern, title.replace(".wav", ""))
+    if not m:
+        return None, None, None, None
+
+    def _parse(dtstr: str) -> datetime:
+        # '20250403T190158.327009+1100' → '2025-04-03T19:01:58.327009+11:00'
+        date = dtstr[:8]
+        time_part = dtstr[9:15]
+        micro = dtstr[16:22]
+        offset = dtstr[22:]
+        return datetime.fromisoformat(
+            f"{date[:4]}-{date[4:6]}-{date[6:8]}T"
+            f"{time_part[:2]}:{time_part[2:4]}:{time_part[4:6]}.{micro}"
+            f"{offset[:3]}:{offset[3:]}"
+        )
+
+    try:
+        start = _parse(m.group("start"))
+        end = _parse(m.group("end"))
+        lat = float(m.group("lat"))
+        lon = float(m.group("lon"))
+        return start, end, lat, lon
+    except (ValueError, IndexError):
+        return None, None, None, None
+
+
+def parse_bar_title_short(
+    title: str,
+) -> tuple[Optional[str], Optional[str], Optional[datetime]]:
+    """Parse a FrontierLabs BAR-LT short-format filename.
+
+    Handles three filename formats (with or without ``.wav`` extension):
+
+    1. **Serial + local time**: ``00014281_20260124_000500[.wav]``
+       All-digit prefix is treated as the recorder serial number.
+       Returns ``(None, serial, start_time)``.
+
+    2. **Name + local time**: ``B8_20260122_043600[.wav]``
+       Letter-prefixed token is the recorder name (caller must resolve to
+       serial via a recorder table lookup).
+       Returns ``(rec_name, None, start_time)``.
+
+    3. **Name + offset time**: ``JEJL_20251215T044000+1100_suffix[.wav]``
+       Recorder name followed by an explicit UTC-offset timestamp.
+       Returns ``(rec_name, None, start_time)``.
+
+    Local-time formats (1 & 2) are localised to Australia/Hobart.
+
+    Returns:
+        ``(rec_name, serial, start_time)`` — whichever fields were found;
+        unresolved fields are ``None``.  Returns ``(None, None, None)`` if no
+        format matches.
+    """
+    stem = Path(title).stem  # strip .wav if present
+
+    # Format 1: <serial>_YYYYMMDD_hhmmss (all-digit prefix)
+    m = re.match(
+        r"^(?P<serial>\d+)_(?P<date>\d{8})_(?P<time>\d{6})$",
+        stem,
+        re.IGNORECASE,
+    )
+    if m:
+        start = localize_hobart(
+            datetime.strptime(f"{m.group('date')}{m.group('time')}", "%Y%m%d%H%M%S")
+        )
+        return None, m.group("serial"), start
+
+    # Format 2: <rec_name>_YYYYMMDD_hhmmss (letter-prefixed name, local time)
+    m = re.match(
+        r"^(?P<rec_name>[A-Za-z]\w*)_(?P<date>\d{8})_(?P<time>\d{6})$",
+        stem,
+        re.IGNORECASE,
+    )
+    if m:
+        start = localize_hobart(
+            datetime.strptime(f"{m.group('date')}{m.group('time')}", "%Y%m%d%H%M%S")
+        )
+        return m.group("rec_name"), None, start
+
+    # Format 3: <rec_name>_YYYYMMDDThhmmss±hhmm[_suffix] (name + UTC-offset)
+    m = re.match(
+        r"^(?P<rec_name>\w+)_(?P<ts>\d{8}T\d{6}[+-]\d{4})",
+        stem,
+    )
+    if m:
+        try:
+            start = parse_guano_timestamp(m.group("ts"))
+            return m.group("rec_name"), None, start
+        except ValueError:
+            pass
+
+    return None, None, None
+
+
 def read_wav_metadata(path: str | Path) -> WavMetadata:
-    """Extract metadata from a WAV file using GUANO, filename, and hardcoded fallbacks.
+    """Extract metadata from a WAV file using GUANO, wavinfo, filename, and hardcoded fallbacks.
 
     Args:
         path: Full path to the WAV file.
@@ -138,6 +264,28 @@ def read_wav_metadata(path: str | Path) -> WavMetadata:
         raise
     except Exception as exc:
         logger.debug(f"GUANO read failed for '{path.name}': {exc}")
+
+    # ------------------------------------------------------------------
+    # Step 2.5 — wavinfo INFO chunk (FrontierLabs BAR-LT recorders)
+    # Only attempted when GUANO left fields unpopulated.
+    # ------------------------------------------------------------------
+    if meta.timestamp is None or meta.lat is None or meta.serial_no is None:
+        try:
+            import wavinfo
+            wi = wavinfo.WavInfoReader(str(path))
+            if wi.info is not None:
+                if wi.info.album and meta.serial_no is None:
+                    meta.serial_no = str(wi.info.album)
+                if wi.info.title:
+                    _start, _end, _lat, _lon = parse_bar_title_long(wi.info.title)
+                    if _start is not None:
+                        if meta.timestamp is None:
+                            meta.timestamp = localize_hobart(_start)
+                        if meta.lat is None and _lat is not None:
+                            meta.lat = _lat
+                            meta.lon = _lon
+        except Exception as exc:
+            logger.debug(f"wavinfo read failed for '{path.name}': {exc}")
 
     # ------------------------------------------------------------------
     # Step 3 — Filename timestamp fallback (when GUANO gave no timestamp)
@@ -204,6 +352,16 @@ def _apply_filename_timestamp(meta: WavMetadata) -> None:
     stem = meta.path.stem  # without .wav
 
     try:
+        # BAR-LT serial_YYYYMMDD_hhmmss: '00014281_20260124_000500.wav'
+        # (All-digit prefix — must be checked before the generic pattern below)
+        m = re.match(r"^(?P<serial>\d+)_(?P<date>\d{8})_(?P<time>\d{6})$", stem)
+        if m:
+            meta.serial_no = meta.serial_no or m.group("serial")
+            meta.timestamp = localize_hobart(
+                datetime.strptime(f"{m.group('date')}{m.group('time')}", "%Y%m%d%H%M%S")
+            )
+            return
+
         if any(f"NT{n:02d}" in name for n in range(1, 9)):
             # NT01-SITENAME_20231115_194345
             parts = stem.split("_")
@@ -236,6 +394,16 @@ def _apply_filename_timestamp(meta: WavMetadata) -> None:
             meta.recorder_name = meta.recorder_name or "JEJL"
             meta.timestamp = parse_guano_timestamp(parts[1])
             return
+
+        # BAR-LT name_YYYYMMDDThhmmss±hhmm[_suffix]: 'B8_20251215T044000+1100.wav'
+        m = re.match(r"^(?P<rec_name>[A-Za-z]\w*)_(?P<ts>\d{8}T\d{6}[+-]\d{4})", stem)
+        if m:
+            try:
+                meta.recorder_name = meta.recorder_name or m.group("rec_name")
+                meta.timestamp = parse_guano_timestamp(m.group("ts"))
+                return
+            except ValueError:
+                pass
 
         m = _YYYYMMDD_HHMMSS.match(name)
         if m:

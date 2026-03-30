@@ -21,6 +21,7 @@ dependencies = [
     "shapely>=2.0.0",
     "soundfile>=0.13.0",
     "sqlalchemy>=2.0.0",
+    "wavinfo>=4.0.0",
 ]
 
 [build-system]

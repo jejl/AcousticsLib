@@ -23,7 +23,12 @@ from .exceptions import (
     AmbiguousObservationError,
 )
 from .time_utils import localize_hobart, parse_guano_timestamp, match_observation_window
-from .audio.metadata import WavMetadata, read_wav_metadata
+from .audio.metadata import (
+    WavMetadata,
+    read_wav_metadata,
+    parse_bar_title_long,
+    parse_bar_title_short,
+)
 
 __all__ = [
     # Exceptions
@@ -47,4 +52,6 @@ __all__ = [
     # Audio metadata
     "WavMetadata",
     "read_wav_metadata",
+    "parse_bar_title_long",
+    "parse_bar_title_short",
 ]
