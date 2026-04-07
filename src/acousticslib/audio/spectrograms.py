@@ -9,6 +9,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import spectrogram
 
+# Fixed margins (inches) used when cm_per_second layout is active.
+# These reserve space for axis labels/ticks so the *data area* is exactly
+# duration * cm_per_second / 2.54 inches wide.
+_L_IN = 0.90   # left  — y-axis label + tick labels
+_R_IN = 0.15   # right — small padding
+_B_IN = 0.45   # bottom — x-axis label + tick labels
+_T_IN = 0.10   # top    — small padding
+
 
 def generate_spectrogram(
     data: np.ndarray,
@@ -20,6 +28,7 @@ def generate_spectrogram(
     dpi: int = 200,
     legend_fontsize: int = 6,
     low_freq_hz: float = 500.0,
+    cm_per_second: float = None,
 ) -> plt.Figure:
     """Generate a two-panel power spectrogram figure.
 
@@ -36,6 +45,8 @@ def generate_spectrogram(
         dpi:                Figure DPI (used to convert pixels to inches).
         legend_fontsize:    Font size for the panel labels.
         low_freq_hz:        Upper frequency limit for the bottom panel (Hz).
+        cm_per_second:      If given, overrides *pixels_per_second* / *dpi* and
+                            sets the figure width so 1 second = this many cm.
 
     Returns:
         matplotlib Figure.
@@ -44,8 +55,11 @@ def generate_spectrogram(
     Sxx_db = 10 * np.log10(Sxx + 1e-7)
 
     duration = t[-1]
-    fig_width  = max(duration * pixels_per_second / dpi, 1.0)
     fig_height = 600 / dpi
+    if cm_per_second is not None:
+        fig_width = max(duration * cm_per_second / 2.54, 0.5) + _L_IN + _R_IN
+    else:
+        fig_width = max(duration * pixels_per_second / dpi, 1.0)
 
     fig, (ax1, ax2) = plt.subplots(
         2, 1,
@@ -75,9 +89,20 @@ def generate_spectrogram(
         handlelength=0, handletextpad=0.1, borderpad=0.5, labelspacing=0.2,
     )
 
-    fig.text(0.0, 0.5, "Frequency (Hz)", va="center", rotation="vertical", fontsize=12)
-    plt.subplots_adjust(hspace=0, left=0.13)
-    plt.tight_layout()
+    if cm_per_second is not None:
+        ax1.set_ylabel("Frequency (Hz)", fontsize=10)
+        ax2.set_ylabel("Frequency (Hz)", fontsize=10)
+        fig.subplots_adjust(
+            left=_L_IN / fig_width,
+            right=1.0 - _R_IN / fig_width,
+            bottom=_B_IN / fig_height,
+            top=1.0 - _T_IN / fig_height,
+            hspace=0,
+        )
+    else:
+        fig.text(0.0, 0.5, "Frequency (Hz)", va="center", rotation="vertical", fontsize=12)
+        plt.subplots_adjust(hspace=0, left=0.13)
+        plt.tight_layout()
 
     return fig
 
@@ -131,6 +156,7 @@ def generate_spectrogram_single_panel(
     pixels_per_second: float = 50,
     dpi: int = 200,
     legend_fontsize: int = 6,
+    cm_per_second: float = None,
 ) -> plt.Figure:
     """Single-panel spectrogram with colour scaling from a specific frequency band.
 
@@ -149,6 +175,8 @@ def generate_spectrogram_single_panel(
         pixels_per_second: Figure width in pixels per second of audio.
         dpi:             Figure DPI.
         legend_fontsize: Font size for the panel label.
+        cm_per_second:   If given, overrides *pixels_per_second* / *dpi* and
+                         sets the figure width so 1 second = this many cm.
 
     Returns:
         matplotlib Figure.
@@ -159,8 +187,11 @@ def generate_spectrogram_single_panel(
     vmin, vmax = _vmin_vmax_for_range(Sxx_db, f, scaling_fmin, scaling_fmax)
 
     duration = t[-1]
-    fig_width = max(duration * pixels_per_second / dpi, 1.0)
     fig_height = 300 / dpi
+    if cm_per_second is not None:
+        fig_width = max(duration * cm_per_second / 2.54, 0.5) + _L_IN + _R_IN
+    else:
+        fig_width = max(duration * pixels_per_second / dpi, 1.0)
 
     fig, ax = plt.subplots(1, 1, figsize=(fig_width, fig_height))
 
@@ -177,7 +208,15 @@ def generate_spectrogram_single_panel(
         loc="upper right", fontsize=legend_fontsize, frameon=True,
         handlelength=0, handletextpad=0.1, borderpad=0.5, labelspacing=0.2,
     )
-    plt.tight_layout()
+    if cm_per_second is not None:
+        fig.subplots_adjust(
+            left=_L_IN / fig_width,
+            right=1.0 - _R_IN / fig_width,
+            bottom=_B_IN / fig_height,
+            top=1.0 - _T_IN / fig_height,
+        )
+    else:
+        plt.tight_layout()
     return fig
 
 
@@ -195,6 +234,7 @@ def generate_spectrogram_two_panel_scaled(
     pixels_per_second: float = 50,
     dpi: int = 200,
     legend_fontsize: int = 6,
+    cm_per_second: float = None,
 ) -> plt.Figure:
     """Two-panel spectrogram with independent colour scaling per panel.
 
@@ -216,6 +256,8 @@ def generate_spectrogram_two_panel_scaled(
         pixels_per_second: Figure width in pixels per second of audio.
         dpi:               Figure DPI.
         legend_fontsize:   Font size for panel labels.
+        cm_per_second:     If given, overrides *pixels_per_second* / *dpi* and
+                           sets the figure width so 1 second = this many cm.
 
     Returns:
         matplotlib Figure.
@@ -227,8 +269,11 @@ def generate_spectrogram_two_panel_scaled(
     vmin2, vmax2 = _vmin_vmax_for_range(Sxx_db, f, bot_scaling_fmin, bot_scaling_fmax)
 
     duration = t[-1]
-    fig_width = max(duration * pixels_per_second / dpi, 1.0)
     fig_height = 600 / dpi
+    if cm_per_second is not None:
+        fig_width = max(duration * cm_per_second / 2.54, 0.5) + _L_IN + _R_IN
+    else:
+        fig_width = max(duration * pixels_per_second / dpi, 1.0)
 
     fig, (ax1, ax2) = plt.subplots(
         2, 1,
@@ -262,9 +307,20 @@ def generate_spectrogram_two_panel_scaled(
         handlelength=0, handletextpad=0.1, borderpad=0.5, labelspacing=0.2,
     )
 
-    fig.text(0.0, 0.5, "Frequency (Hz)", va="center", rotation="vertical", fontsize=12)
-    plt.subplots_adjust(hspace=0, left=0.13)
-    plt.tight_layout()
+    if cm_per_second is not None:
+        ax1.set_ylabel("Frequency (Hz)", fontsize=10)
+        ax2.set_ylabel("Frequency (Hz)", fontsize=10)
+        fig.subplots_adjust(
+            left=_L_IN / fig_width,
+            right=1.0 - _R_IN / fig_width,
+            bottom=_B_IN / fig_height,
+            top=1.0 - _T_IN / fig_height,
+            hspace=0,
+        )
+    else:
+        fig.text(0.0, 0.5, "Frequency (Hz)", va="center", rotation="vertical", fontsize=12)
+        plt.subplots_adjust(hspace=0, left=0.13)
+        plt.tight_layout()
     return fig
 
 
@@ -279,6 +335,7 @@ def generate_classifier_spectrogram(
     pixels_per_second: float = 50,
     dpi: int = 200,
     legend_fontsize: int = 6,
+    cm_per_second: float = None,
 ) -> plt.Figure:
     """Generate a spectrogram appropriate for the given classifier.
 
@@ -309,6 +366,8 @@ def generate_classifier_spectrogram(
         pixels_per_second: Figure width in pixels per second of audio.
         dpi:             Figure DPI.
         legend_fontsize: Font size for panel labels.
+        cm_per_second:   If given, overrides *pixels_per_second* / *dpi* and
+                         sets the figure width so 1 second = this many cm.
 
     Returns:
         matplotlib Figure.
@@ -317,6 +376,7 @@ def generate_classifier_spectrogram(
         pixels_per_second=pixels_per_second,
         dpi=dpi,
         legend_fontsize=legend_fontsize,
+        cm_per_second=cm_per_second,
     )
 
     if classifier == "curlew":
