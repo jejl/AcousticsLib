@@ -103,6 +103,253 @@ def generate_spectrogram_preview(cmap_name: str) -> plt.Figure:
     return fig
 
 
+def _vmin_vmax_for_range(
+    Sxx_db: np.ndarray,
+    f: np.ndarray,
+    f_lo: float,
+    f_hi: float,
+) -> tuple:
+    """Return (vmin, vmax) from the 2nd–98th percentile of *Sxx_db* in [f_lo, f_hi].
+
+    Falls back to the global min/max if no frequency bins fall in the band.
+    """
+    idx = np.where((f >= f_lo) & (f <= f_hi))[0]
+    if idx.size == 0:
+        return float(Sxx_db.min()), float(Sxx_db.max())
+    subset = Sxx_db[idx, :]
+    return float(np.percentile(subset, 2)), float(np.percentile(subset, 98))
+
+
+def generate_spectrogram_single_panel(
+    data: np.ndarray,
+    sample_rate: int,
+    fmin: float,
+    fmax: float,
+    cmap: str,
+    scaling_fmin: float,
+    scaling_fmax: float,
+    pixels_per_second: float = 50,
+    dpi: int = 200,
+    legend_fontsize: int = 6,
+) -> plt.Figure:
+    """Single-panel spectrogram with colour scaling from a specific frequency band.
+
+    The colour limits (vmin/vmax) are derived from the 2nd–98th percentile of
+    power in the band [*scaling_fmin*, *scaling_fmax*], so the display contrast
+    is tuned to the species' call frequency range rather than the full spectrum.
+
+    Args:
+        data:            1-D audio array (mono).
+        sample_rate:     Sample rate in Hz.
+        fmin:            Minimum displayed frequency (Hz).
+        fmax:            Maximum displayed frequency (Hz).
+        cmap:            Matplotlib colourmap name.
+        scaling_fmin:    Lower bound of the band used for colour scaling (Hz).
+        scaling_fmax:    Upper bound of the band used for colour scaling (Hz).
+        pixels_per_second: Figure width in pixels per second of audio.
+        dpi:             Figure DPI.
+        legend_fontsize: Font size for the panel label.
+
+    Returns:
+        matplotlib Figure.
+    """
+    f, t, Sxx = spectrogram(data, sample_rate, nperseg=1024)
+    Sxx_db = 10 * np.log10(Sxx + 1e-7)
+
+    vmin, vmax = _vmin_vmax_for_range(Sxx_db, f, scaling_fmin, scaling_fmax)
+
+    duration = t[-1]
+    fig_width = max(duration * pixels_per_second / dpi, 1.0)
+    fig_height = 300 / dpi
+
+    fig, ax = plt.subplots(1, 1, figsize=(fig_width, fig_height))
+
+    f_idx = np.where((f >= fmin) & (f <= fmax))[0]
+    ax.pcolormesh(
+        t, f[f_idx], Sxx_db[f_idx, :],
+        shading="gouraud", cmap=cmap, vmin=vmin, vmax=vmax,
+    )
+    ax.tick_params(axis="both", which="major", labelsize=8)
+    ax.set_xlabel("Time (s)", fontsize=10)
+    ax.set_ylabel("Frequency (Hz)", fontsize=10)
+    ax.legend(
+        handles=[plt.Line2D([], [], color="none", label="All frequencies")],
+        loc="upper right", fontsize=legend_fontsize, frameon=True,
+        handlelength=0, handletextpad=0.1, borderpad=0.5, labelspacing=0.2,
+    )
+    plt.tight_layout()
+    return fig
+
+
+def generate_spectrogram_two_panel_scaled(
+    data: np.ndarray,
+    sample_rate: int,
+    fmin: float,
+    fmax: float,
+    cmap: str,
+    low_freq_hz: float,
+    top_scaling_fmin: float,
+    top_scaling_fmax: float,
+    bot_scaling_fmin: float,
+    bot_scaling_fmax: float,
+    pixels_per_second: float = 50,
+    dpi: int = 200,
+    legend_fontsize: int = 6,
+) -> plt.Figure:
+    """Two-panel spectrogram with independent colour scaling per panel.
+
+    The top panel spans *fmin*–*fmax*; the bottom panel spans 0–*low_freq_hz*.
+    Each panel's colour limits are derived from the 2nd–98th percentile of power
+    within its designated scaling band.
+
+    Args:
+        data:              1-D audio array (mono).
+        sample_rate:       Sample rate in Hz.
+        fmin:              Minimum frequency for the top panel (Hz).
+        fmax:              Maximum frequency for the top panel (Hz).
+        cmap:              Matplotlib colourmap name.
+        low_freq_hz:       Upper frequency limit for the bottom panel (Hz).
+        top_scaling_fmin:  Lower bound used for top-panel colour scaling (Hz).
+        top_scaling_fmax:  Upper bound used for top-panel colour scaling (Hz).
+        bot_scaling_fmin:  Lower bound used for bottom-panel colour scaling (Hz).
+        bot_scaling_fmax:  Upper bound used for bottom-panel colour scaling (Hz).
+        pixels_per_second: Figure width in pixels per second of audio.
+        dpi:               Figure DPI.
+        legend_fontsize:   Font size for panel labels.
+
+    Returns:
+        matplotlib Figure.
+    """
+    f, t, Sxx = spectrogram(data, sample_rate, nperseg=1024)
+    Sxx_db = 10 * np.log10(Sxx + 1e-7)
+
+    vmin1, vmax1 = _vmin_vmax_for_range(Sxx_db, f, top_scaling_fmin, top_scaling_fmax)
+    vmin2, vmax2 = _vmin_vmax_for_range(Sxx_db, f, bot_scaling_fmin, bot_scaling_fmax)
+
+    duration = t[-1]
+    fig_width = max(duration * pixels_per_second / dpi, 1.0)
+    fig_height = 600 / dpi
+
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1,
+        figsize=(fig_width, fig_height),
+        gridspec_kw={"height_ratios": [1, 1]},
+        sharex=True,
+    )
+
+    f_idx_full = np.where((f >= fmin) & (f <= fmax))[0]
+    ax1.pcolormesh(
+        t, f[f_idx_full], Sxx_db[f_idx_full, :],
+        shading="gouraud", cmap=cmap, vmin=vmin1, vmax=vmax1,
+    )
+    ax1.tick_params(axis="both", which="major", labelsize=8)
+    ax1.legend(
+        handles=[plt.Line2D([], [], color="none", label="All frequencies")],
+        loc="upper right", fontsize=legend_fontsize, frameon=True,
+        handlelength=0, handletextpad=0.1, borderpad=0.5, labelspacing=0.2,
+    )
+
+    f_idx_low = np.where((f >= 0) & (f <= low_freq_hz))[0]
+    ax2.pcolormesh(
+        t, f[f_idx_low], Sxx_db[f_idx_low, :],
+        shading="gouraud", cmap=cmap, vmin=vmin2, vmax=vmax2,
+    )
+    ax2.tick_params(axis="both", which="major", labelsize=8)
+    ax2.set_xlabel("Time (s)", fontsize=10)
+    ax2.legend(
+        handles=[plt.Line2D([], [], color="none", label="Low frequencies")],
+        loc="upper right", fontsize=legend_fontsize, frameon=True,
+        handlelength=0, handletextpad=0.1, borderpad=0.5, labelspacing=0.2,
+    )
+
+    fig.text(0.0, 0.5, "Frequency (Hz)", va="center", rotation="vertical", fontsize=12)
+    plt.subplots_adjust(hspace=0, left=0.13)
+    plt.tight_layout()
+    return fig
+
+
+def generate_classifier_spectrogram(
+    data: np.ndarray,
+    sample_rate: int,
+    classifier: str,
+    fmin: float,
+    fmax: float,
+    cmap: str,
+    low_freq_hz: float = 500.0,
+    pixels_per_second: float = 50,
+    dpi: int = 200,
+    legend_fontsize: int = 6,
+) -> plt.Figure:
+    """Generate a spectrogram appropriate for the given classifier.
+
+    Behaviour by classifier:
+
+    ``"curlew"``
+        Single panel (full frequency range).  Colour is scaled using power in
+        the 1 kHz–*low_freq_hz* band to maximise contrast for curlew calls.
+
+    ``"bittern"``
+        Two panels (full range + 0–*low_freq_hz*).  The bottom panel is colour-
+        scaled using power in the 50 Hz–*low_freq_hz* band to highlight bittern
+        booms while suppressing DC noise.  The top panel is scaled across the
+        full displayed range.
+
+    anything else (unknown / multiple classifiers)
+        Two panels, each scaled by its own displayed frequency range.
+
+    Args:
+        data:            1-D audio array (mono).
+        sample_rate:     Sample rate in Hz.
+        classifier:      ``"bittern"``, ``"curlew"``, or ``""`` / other.
+        fmin:            Minimum displayed frequency (Hz).
+        fmax:            Maximum displayed frequency (Hz).
+        cmap:            Matplotlib colourmap name.
+        low_freq_hz:     Upper frequency for the low-frequency panel / scaling
+                         band.  Typically 500 Hz for bittern, 5000 Hz for curlew.
+        pixels_per_second: Figure width in pixels per second of audio.
+        dpi:             Figure DPI.
+        legend_fontsize: Font size for panel labels.
+
+    Returns:
+        matplotlib Figure.
+    """
+    common = dict(
+        pixels_per_second=pixels_per_second,
+        dpi=dpi,
+        legend_fontsize=legend_fontsize,
+    )
+
+    if classifier == "curlew":
+        return generate_spectrogram_single_panel(
+            data, sample_rate, fmin, fmax, cmap,
+            scaling_fmin=1000.0,
+            scaling_fmax=low_freq_hz,
+            **common,
+        )
+
+    if classifier == "bittern":
+        return generate_spectrogram_two_panel_scaled(
+            data, sample_rate, fmin, fmax, cmap,
+            low_freq_hz=low_freq_hz,
+            top_scaling_fmin=fmin,
+            top_scaling_fmax=fmax,
+            bot_scaling_fmin=50.0,
+            bot_scaling_fmax=low_freq_hz,
+            **common,
+        )
+
+    # Unknown or multiple classifiers: two panels, each scaled by its own range
+    return generate_spectrogram_two_panel_scaled(
+        data, sample_rate, fmin, fmax, cmap,
+        low_freq_hz=low_freq_hz,
+        top_scaling_fmin=fmin,
+        top_scaling_fmax=fmax,
+        bot_scaling_fmin=0.0,
+        bot_scaling_fmax=low_freq_hz,
+        **common,
+    )
+
+
 def calculate_max_frequency(directory: str) -> int:
     """Return the Nyquist frequency of the highest-sample-rate WAV in *directory*.
 
