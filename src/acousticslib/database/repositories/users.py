@@ -18,7 +18,8 @@ class UserRepository:
         with get_session() as session:
             return session.execute(
                 text(
-                    "SELECT id, username, full_name, email, phone, last_login, is_admin "
+                    "SELECT id, username, full_name, email, phone, last_login, "
+                    "is_admin, disabled "
                     "FROM calltrackers.users ORDER BY username"
                 )
             ).mappings().all()
@@ -30,7 +31,8 @@ class UserRepository:
         with get_session() as session:
             return session.execute(
                 text(
-                    "SELECT id, username, full_name, email, phone, last_login, is_admin "
+                    "SELECT id, username, full_name, email, phone, last_login, "
+                    "is_admin, disabled "
                     "FROM calltrackers.users WHERE id = :id"
                 ),
                 {"id": user_id},
@@ -140,6 +142,18 @@ class UserRepository:
                     "UPDATE calltrackers.users SET last_login = :now WHERE id = :id"
                 ),
                 {"now": datetime.datetime.now(), "id": user_id},
+            )
+
+    @staticmethod
+    @handle_repository_errors
+    def set_disabled(user_id: int, disabled: bool) -> None:
+        """Set the disabled flag for a user."""
+        with get_session() as session:
+            session.execute(
+                text(
+                    "UPDATE calltrackers.users SET disabled=:disabled WHERE id=:id"
+                ),
+                {"disabled": int(disabled), "id": user_id},
             )
 
     @staticmethod
