@@ -187,7 +187,7 @@ def generate_spectrogram_single_panel(
     vmin, vmax = _vmin_vmax_for_range(Sxx_db, f, scaling_fmin, scaling_fmax)
 
     duration = t[-1]
-    fig_height = 300 / dpi
+    fig_height = 600 / dpi
     if cm_per_second is not None:
         fig_width = max(duration * cm_per_second / 2.54, 0.5) + _L_IN + _R_IN
     else:
