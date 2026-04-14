@@ -138,9 +138,12 @@ class PasswordResetService:
             f"— AstroAcoustics / NatureTrackers"
         )
         if not send_email(to=email, subject="Password reset request", body_text=body):
-            # Email failure is logged inside send_email; still return generic OK
-            # so the UI doesn't reveal whether the address exists.
             logger.warning(f"Reset email failed to deliver to {email}")
+            return (
+                False,
+                "Unable to send the reset email. Please contact "
+                "acoustic@naturetrackers.au for help.",
+            )
 
         return True, _GENERIC_OK_MSG
 
