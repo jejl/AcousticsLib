@@ -236,6 +236,23 @@ class UserRepository:
 
     @staticmethod
     @handle_repository_errors
+    def count_recent_reset_requests(minutes: int) -> int:
+        """Return the number of distinct accounts that requested a reset in the
+        last *minutes* minutes.  Used for global suspicious-activity detection.
+        """
+        cutoff = datetime.datetime.utcnow() - datetime.timedelta(minutes=minutes)
+        with get_session() as session:
+            row = session.execute(
+                text(
+                    "SELECT COUNT(*) AS cnt FROM calltrackers.users "
+                    "WHERE reset_requested_at >= :cutoff"
+                ),
+                {"cutoff": cutoff},
+            ).mappings().first()
+            return int(row["cnt"]) if row else 0
+
+    @staticmethod
+    @handle_repository_errors
     def delete(user_id: int) -> None:
         """Delete a user by id."""
         with get_session() as session:
