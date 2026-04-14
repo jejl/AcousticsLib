@@ -97,11 +97,11 @@ class PasswordResetService:
         try:
             user = UserRepository.get_by_email(email)
         except Exception as exc:
-            logger.error("Password reset DB lookup error: %s", exc)
+            logger.error(f"Password reset DB lookup error: {exc}")
             return True, _GENERIC_OK_MSG
 
         if not user:
-            logger.info("Password reset requested for unknown email: %s", email)
+            logger.info(f"Password reset requested for unknown email: {email}")
             return True, _GENERIC_OK_MSG
 
         # Rate-limit: reject if a request was made less than 5 minutes ago.
@@ -110,7 +110,7 @@ class PasswordResetService:
             elapsed = (_utcnow() - last_req).total_seconds()
             if elapsed < _RATE_LIMIT_MINUTES * 60:
                 logger.info(
-                    "Reset rate-limited for user %s (%.0fs ago)", user["id"], elapsed
+                    f"Reset rate-limited for user {user['id']} ({elapsed:.0f}s ago)"
                 )
                 return True, _GENERIC_OK_MSG
 
@@ -122,7 +122,7 @@ class PasswordResetService:
         try:
             UserRepository.set_reset_token(user["id"], token_hash, expires_at)
         except Exception as exc:
-            logger.error("Failed to store reset token for user %s: %s", user["id"], exc)
+            logger.error(f"Failed to store reset token for user {user['id']}: {exc}")
             return True, _GENERIC_OK_MSG
 
         reset_url = f"{app_url.rstrip('/')}?reset_token={token}"
@@ -140,7 +140,7 @@ class PasswordResetService:
         if not send_email(to=email, subject="Password reset request", body_text=body):
             # Email failure is logged inside send_email; still return generic OK
             # so the UI doesn't reveal whether the address exists.
-            logger.warning("Reset email failed to deliver to %s", email)
+            logger.warning(f"Reset email failed to deliver to {email}")
 
         return True, _GENERIC_OK_MSG
 
@@ -159,7 +159,7 @@ class PasswordResetService:
         try:
             user = UserRepository.get_by_reset_token_hash(token_hash)
         except Exception as exc:
-            logger.error("Token validation error: %s", exc)
+            logger.error(f"Token validation error: {exc}")
             return False, "An error occurred. Please try again.", None
 
         if not user:
@@ -204,9 +204,9 @@ class PasswordResetService:
             UserRepository.clear_reset_token(user_id)
         except Exception as exc:
             logger.error(
-                "Failed to complete password reset for user %s: %s", user_id, exc
+                f"Failed to complete password reset for user {user_id}: {exc}"
             )
             return False, "An error occurred while resetting your password. Please try again."
 
-        logger.info("Password reset completed for user %s", user_id)
+        logger.info(f"Password reset completed for user {user_id}")
         return True, "Your password has been reset successfully. You can now log in."

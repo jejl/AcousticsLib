@@ -1,6 +1,6 @@
 [project]
 name = "acousticslib"
-version = "0.1.7"
+version = "0.1.9"
 description = "Shared library for acoustic data management"
 readme = "README.md"
 authors = [
@@ -22,6 +22,7 @@ dependencies = [
     "soundfile>=0.13.0",
     "sqlalchemy>=2.0.0",
     "wavinfo>=4.0.0",
+    "pytz>=2026.1.post1",
 ]
 
 [build-system]

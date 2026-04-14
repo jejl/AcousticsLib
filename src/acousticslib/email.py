@@ -45,7 +45,7 @@ def send_email(
         logger.error(
             "SMTP credentials not configured "
             "(CALLTRACKERS_SMTP_USERNAME / CALLTRACKERS_SMTP_PASSWORD); "
-            "email not sent to %s", to
+            f"email not sent to {to}"
         )
         return False
 
@@ -66,8 +66,8 @@ def send_email(
             smtp.starttls(context=context)
             smtp.login(username, password)
             smtp.sendmail(from_addr, [to], msg.as_string())
-        logger.info("Email sent to %s: %s", to, subject)
+        logger.info(f"Email sent to {to}: {subject}")
         return True
     except Exception as exc:
-        logger.error("Failed to send email to %s: %s", to, exc)
+        logger.error(f"Failed to send email to {to}: {exc}")
         return False
