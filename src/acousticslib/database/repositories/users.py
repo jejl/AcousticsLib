@@ -1,6 +1,6 @@
 """Repository for the users table (bcrypt authentication)."""
 import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
 
@@ -154,6 +154,84 @@ class UserRepository:
                     "UPDATE calltrackers.users SET disabled=:disabled WHERE id=:id"
                 ),
                 {"disabled": int(disabled), "id": user_id},
+            )
+
+    @staticmethod
+    @handle_repository_errors
+    def get_by_email(email: str) -> Optional[Dict[str, Any]]:
+        """Return a user row (including reset token fields) by email, or None.
+
+        The lookup is case-insensitive.
+        """
+        with get_session() as session:
+            return session.execute(
+                text(
+                    "SELECT id, username, full_name, email, "
+                    "reset_token_hash, reset_token_expires_at, reset_requested_at "
+                    "FROM calltrackers.users WHERE LOWER(email) = LOWER(:email)"
+                ),
+                {"email": email},
+            ).mappings().first()
+
+    @staticmethod
+    @handle_repository_errors
+    def set_reset_token(
+        user_id: int,
+        token_hash: str,
+        expires_at: datetime.datetime,
+    ) -> None:
+        """Store a password-reset token hash and expiry for *user_id*.
+
+        Also records the request time so callers can rate-limit repeat requests.
+        Any previous token for this user is overwritten.
+        """
+        with get_session() as session:
+            session.execute(
+                text(
+                    "UPDATE calltrackers.users "
+                    "SET reset_token_hash=:hash, "
+                    "    reset_token_expires_at=:expires, "
+                    "    reset_requested_at=:now "
+                    "WHERE id=:id"
+                ),
+                {
+                    "hash":    token_hash,
+                    "expires": expires_at,
+                    "now":     datetime.datetime.utcnow(),
+                    "id":      user_id,
+                },
+            )
+
+    @staticmethod
+    @handle_repository_errors
+    def get_by_reset_token_hash(token_hash: str) -> Optional[Dict[str, Any]]:
+        """Return the user row for *token_hash* if it exists (expired or not).
+
+        The caller is responsible for checking the expiry timestamp.
+        """
+        with get_session() as session:
+            return session.execute(
+                text(
+                    "SELECT id, username, full_name, email, "
+                    "reset_token_expires_at "
+                    "FROM calltrackers.users "
+                    "WHERE reset_token_hash = :hash"
+                ),
+                {"hash": token_hash},
+            ).mappings().first()
+
+    @staticmethod
+    @handle_repository_errors
+    def clear_reset_token(user_id: int) -> None:
+        """Remove the password-reset token for *user_id* (single-use enforcement)."""
+        with get_session() as session:
+            session.execute(
+                text(
+                    "UPDATE calltrackers.users "
+                    "SET reset_token_hash=NULL, reset_token_expires_at=NULL "
+                    "WHERE id=:id"
+                ),
+                {"id": user_id},
             )
 
     @staticmethod
