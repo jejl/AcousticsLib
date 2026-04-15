@@ -127,7 +127,10 @@ class PasswordResetService:
             user = UserRepository.get_by_email(email)
         except Exception as exc:
             logger.error(f"Password reset DB lookup error: {exc}")
-            return True, _GENERIC_OK_MSG
+            return False, (
+                f"A database error occurred. Please try again later or contact "
+                f"{_SUPPORT_EMAIL} for help."
+            )
 
         if not user:
             logger.info(f"Password reset requested for unknown email: {email}")
@@ -138,10 +141,21 @@ class PasswordResetService:
         if last_req is not None:
             elapsed = (_utcnow() - last_req).total_seconds()
             if elapsed < _RATE_LIMIT_MINUTES * 60:
-                logger.info(
-                    f"Reset rate-limited for user {user['id']} ({elapsed:.0f}s ago)"
+                remaining = int(_RATE_LIMIT_MINUTES * 60 - elapsed)
+                mins, secs = divmod(remaining, 60)
+                wait_str = (
+                    f"{mins} minute{'s' if mins != 1 else ''} {secs} second{'s' if secs != 1 else ''}"
+                    if mins else f"{secs} second{'s' if secs != 1 else ''}"
                 )
-                return True, _GENERIC_OK_MSG
+                logger.info(
+                    f"Reset rate-limited for user {user['id']} "
+                    f"({elapsed:.0f}s ago, {remaining}s remaining)"
+                )
+                return True, (
+                    f"A reset link was recently sent to this address. "
+                    f"Please wait {wait_str} before requesting another, "
+                    f"and check your inbox and spam folder."
+                )
 
         # ── Global suspicious-activity check ─────────────────────────────────
         try:
@@ -180,7 +194,10 @@ class PasswordResetService:
             UserRepository.set_reset_token(user["id"], token_hash, expires_at)
         except Exception as exc:
             logger.error(f"Failed to store reset token for user {user['id']}: {exc}")
-            return True, _GENERIC_OK_MSG
+            return False, (
+                f"A database error occurred. Please try again later or contact "
+                f"{_SUPPORT_EMAIL} for help."
+            )
 
         # ── Email user ────────────────────────────────────────────────────────
         reset_url = f"{app_url.rstrip('/')}?reset_token={token}"
