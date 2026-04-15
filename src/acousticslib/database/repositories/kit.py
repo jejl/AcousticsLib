@@ -16,7 +16,7 @@ class KitRepository:
         """Return id, name, label for all kits ordered by name."""
         with get_session() as session:
             return session.execute(
-                text("SELECT id, name, label FROM calltrackers.Kit ORDER BY name")
+                text("SELECT id, name, label, bolt_head_type FROM calltrackers.Kit ORDER BY name")
             ).mappings().all()
 
     @staticmethod
@@ -113,6 +113,16 @@ class KitRepository:
             session.execute(
                 text("UPDATE calltrackers.Kit SET name=:name, label=:label WHERE id=:id"),
                 {"name": name, "label": label, "id": kit_id},
+            )
+
+    @staticmethod
+    @handle_repository_errors
+    def update_bolt_head_type(kit_id: int, bolt_head_type: Optional[str]) -> None:
+        """Set the bolt head type (phillips / hex / None) for a kit."""
+        with get_session() as session:
+            session.execute(
+                text("UPDATE calltrackers.Kit SET bolt_head_type=:bht WHERE id=:id"),
+                {"bht": bolt_head_type, "id": kit_id},
             )
 
     @staticmethod
