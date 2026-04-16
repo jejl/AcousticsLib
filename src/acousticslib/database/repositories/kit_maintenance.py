@@ -22,22 +22,27 @@ class KitMaintenanceRepository:
     @staticmethod
     @handle_repository_errors
     def get_all_kits_with_status() -> List[Dict[str, Any]]:
-        """Return all kits with their most recent maintenance session (if any)."""
+        """Return all kits with their most recent maintenance session (if any).
+
+        Uses a CTE with ROW_NUMBER() to guarantee exactly one row per kit,
+        avoiding MySQL 8 optimizer issues with correlated subqueries in
+        LEFT JOIN ON clauses.
+        """
         with get_session() as session:
             return session.execute(text("""
+                WITH LatestSession AS (
+                    SELECT id, kit_id, status, season,
+                           started_at, completed_at, released_at, technician,
+                           ROW_NUMBER() OVER (PARTITION BY kit_id ORDER BY id DESC) AS rn
+                    FROM calltrackers.KitMaintenanceSession
+                )
                 SELECT
                     k.id AS kit_id, k.name AS kit_name, k.label AS kit_label,
                     k.bolt_head_type,
-                    s.id AS session_id, s.status, s.season,
-                    s.started_at, s.completed_at, s.released_at, s.technician
+                    ls.id AS session_id, ls.status, ls.season,
+                    ls.started_at, ls.completed_at, ls.released_at, ls.technician
                 FROM calltrackers.Kit k
-                LEFT JOIN calltrackers.KitMaintenanceSession s
-                    ON s.kit_id = k.id
-                    AND s.id = (
-                        SELECT MAX(id)
-                        FROM calltrackers.KitMaintenanceSession
-                        WHERE kit_id = k.id
-                    )
+                LEFT JOIN LatestSession ls ON ls.kit_id = k.id AND ls.rn = 1
                 ORDER BY k.name
             """)).mappings().all()
 
@@ -137,25 +142,34 @@ class KitMaintenanceRepository:
     @staticmethod
     @handle_repository_errors
     def get_items_with_checks(session_id: int) -> List[Dict[str, Any]]:
-        """Return all active template items joined to their check row for this session."""
+        """Return template items joined to their check row for this session.
+
+        Active items are always included.  Retired (inactive) items are also
+        included when they already have a check row in this session — so that
+        retiring an item mid-session doesn't silently drop recorded data.
+        """
         with get_session() as session:
             return session.execute(text("""
                 SELECT
                     t.id AS item_id, t.item_name, t.quantity_type,
                     t.min_quantity, t.notes AS item_notes, t.sort_order,
+                    t.active,
                     c.id AS check_id, c.present, c.actual_quantity,
                     c.quantity_needed, c.acquired, c.notes AS check_notes
                 FROM calltrackers.KitItemTemplate t
                 LEFT JOIN calltrackers.KitItemCheck c
                     ON c.item_id = t.id AND c.session_id = :sid
-                WHERE t.active = 1
+                WHERE t.active = 1 OR c.id IS NOT NULL
                 ORDER BY t.sort_order, t.id
             """), {"sid": session_id}).mappings().all()
 
     @staticmethod
     @handle_repository_errors
     def get_tasks_with_checks(session_id: int) -> List[Dict[str, Any]]:
-        """Return all tasks for active items joined to their completion row."""
+        """Return tasks joined to their completion row for this session.
+
+        Mirrors the same active/historical logic as get_items_with_checks.
+        """
         with get_session() as session:
             return session.execute(text("""
                 SELECT
@@ -170,7 +184,7 @@ class KitMaintenanceRepository:
                     ON c.item_id = t.id AND c.session_id = :sid
                 LEFT JOIN calltrackers.KitItemTaskCheck tc
                     ON tc.task_id = tk.id AND tc.item_check_id = c.id
-                WHERE t.active = 1
+                WHERE t.active = 1 OR c.id IS NOT NULL
                 ORDER BY t.sort_order, tk.sort_order
             """), {"sid": session_id}).mappings().all()
 
