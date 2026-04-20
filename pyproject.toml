@@ -1,6 +1,6 @@
 [project]
 name = "acousticslib"
-version = "0.2.1"
+version = "0.2.2"
 description = "Shared library for acoustic data management"
 readme = "README.md"
 authors = [

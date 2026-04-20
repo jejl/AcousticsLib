@@ -1,6 +1,11 @@
 # AcousticsLib
 
-Shared Python library for the AstroAcoustics acoustic bat-call monitoring stack. Consumed by **CallTrackersAdmin** (Streamlit admin app) and **SoundClass** (Streamlit classification app), both of which install it from this git repository.
+Shared Python library for managing CallTrackers logistics, hardware 
+maintanance, observations, data analysis and reporting. Consumed by 
+**CallTrackersAdmin** (Streamlit admin app) and **SoundClass** 
+(Streamlit classification app), both of which install it from this git 
+repository. The library will also be used to process data from multi-microphone 
+array recordings.
 
 ## Package layout
 
