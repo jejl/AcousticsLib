@@ -6,7 +6,7 @@ Security note:
     ``_TABLE_ALLOWLIST`` before use.  Do not add dynamic-table methods without
     this guard.
 """
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 
@@ -122,6 +122,49 @@ class ResultsRepository:
         with get_session() as session:
             result = session.execute(text(sql), rows)
             return result.rowcount
+
+    @staticmethod
+    @handle_repository_errors
+    def get_scored_with_metadata(
+        obs_id: int,
+        table_name: str,
+        min_score: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return result rows joined with Metadata for an observation.
+
+        Returns ``Original_File_Name``, ``start_time``, ``Actual_Datetime``,
+        ``Score``.  When *min_score* is provided and > 0 only rows at or above
+        the threshold are returned.
+
+        Args:
+            obs_id: LocationLog.id
+            table_name: Must be in ``_TABLE_ALLOWLIST``.
+            min_score: Optional score floor; None means no filtering.
+        """
+        if table_name not in _TABLE_ALLOWLIST:
+            raise ValueError(
+                f"Table '{table_name}' is not in the allowed list: {_TABLE_ALLOWLIST}"
+            )
+        if obs_id is None:
+            return []
+        apply_filter = min_score is not None and min_score > 0.0
+        params: dict = {"obs_id": obs_id}
+        if apply_filter:
+            params["min_score"] = min_score
+        with get_session() as session:
+            rows = session.execute(
+                text(
+                    f"SELECT r.Original_File_Name, m.start_time, r.Actual_Datetime, r.Score "
+                    f"FROM calltrackers.`{table_name}` r "
+                    f"JOIN calltrackers.Metadata m "
+                    f"  ON m.file_name = r.Original_File_Name "
+                    f"  AND m.observation_id = :obs_id "
+                    f"WHERE r.observation_id = :obs_id"
+                    + (" AND r.Score >= :min_score" if apply_filter else "")
+                ),
+                params,
+            ).mappings().all()
+        return [dict(r) for r in rows]
 
     @staticmethod
     @handle_repository_errors

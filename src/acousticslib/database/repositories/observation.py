@@ -235,3 +235,111 @@ class ObservationRepository:
                 text("SELECT MAX(sequence_num) AS maxid FROM calltrackers.LocationLog")
             ).mappings().first()
             return (row["maxid"] or 0) + 1
+
+    @staticmethod
+    @handle_repository_errors
+    def insert_locationlog(entries: List[Dict[str, Any]]) -> int:
+        """Bulk-insert LocationLog entries. Returns the number of rows inserted."""
+        if not entries:
+            return 0
+        insert_sql = text(
+            "INSERT INTO calltrackers.LocationLog "
+            "(sequence_num, start_time, end_time, start_file, end_file, recorder_id, "
+            " program_id, lat, lon, square, correct_position, Location_Description, "
+            " Comment, person) "
+            "VALUES (:sequence_num, :start_time, :end_time, :start_file, :end_file, "
+            "        :recorder_id, :program_id, :lat, :lon, :square, :correct_position, "
+            "        :Location_Description, :Comment, :person)"
+        )
+        with get_session() as session:
+            for entry in entries:
+                session.execute(insert_sql, entry)
+        return len(entries)
+
+    @staticmethod
+    @handle_repository_errors
+    def delete(obs_id: int) -> None:
+        """Delete a LocationLog row by *obs_id*."""
+        with get_session() as session:
+            session.execute(
+                text("DELETE FROM calltrackers.LocationLog WHERE id = :id"),
+                {"id": obs_id},
+            )
+
+    @staticmethod
+    @handle_repository_errors
+    def get_start_file_lookup() -> Dict[str, int]:
+        """Return {start_file: id} for all LocationLog rows."""
+        with get_session() as session:
+            rows = session.execute(
+                text("SELECT id, start_file FROM calltrackers.LocationLog")
+            ).mappings().all()
+        return {r["start_file"]: r["id"] for r in rows}
+
+    @staticmethod
+    @handle_repository_errors
+    def get_all_obscode_program_ids() -> List[Dict[str, Any]]:
+        """Return [{obscode, program_id}] for every LocationLog row with a non-null obscode."""
+        with get_session() as session:
+            rows = session.execute(
+                text(
+                    "SELECT obscode, program_id "
+                    "FROM calltrackers.LocationLog "
+                    "WHERE obscode IS NOT NULL"
+                )
+            ).mappings().all()
+        return [{"obscode": r["obscode"], "program_id": r["program_id"]} for r in rows]
+
+    @staticmethod
+    @handle_repository_errors
+    def get_by_sequence_num(seq_num: int) -> Optional[Dict[str, Any]]:
+        """Return the LocationLog row for *seq_num*, or None."""
+        with get_session() as session:
+            return session.execute(
+                text(
+                    "SELECT id, obscode, sequence_num "
+                    "FROM calltrackers.LocationLog WHERE sequence_num = :seq"
+                ),
+                {"seq": seq_num},
+            ).mappings().first()
+
+    @staticmethod
+    @handle_repository_errors
+    def update_fields_by_sequence_num(seq_num: int, fields: Dict[str, Any]) -> None:
+        """Update editable fields on the LocationLog row matching *seq_num*.
+
+        Only columns in :attr:`EDITABLE_COLUMNS` are permitted.
+        """
+        if not fields:
+            return
+        disallowed = set(fields) - ObservationRepository.EDITABLE_COLUMNS
+        if disallowed:
+            raise ValidationError(
+                f"Column(s) {disallowed} are not editable via this method."
+            )
+        set_clause = ", ".join(f"`{col}` = :{col}" for col in fields)
+        with get_session() as session:
+            session.execute(
+                text(
+                    f"UPDATE calltrackers.LocationLog "
+                    f"SET {set_clause} WHERE sequence_num = :seq_num"
+                ),
+                {**fields, "seq_num": seq_num},
+            )
+
+    @staticmethod
+    @handle_repository_errors
+    def get_recorder_observer(obs_id: int) -> Dict[str, Any]:
+        """Return recorder_name and observer_name for *obs_id*, or an empty dict."""
+        with get_session() as session:
+            row = session.execute(
+                text(
+                    "SELECT R.name AS recorder_name, P.PersName AS observer_name "
+                    "FROM calltrackers.LocationLog LL "
+                    "JOIN calltrackers.Recorder R ON LL.recorder_id = R.id "
+                    "LEFT JOIN calltrackers.People P ON LL.person = P.id "
+                    "WHERE LL.id = :id"
+                ),
+                {"id": obs_id},
+            ).mappings().first()
+        return dict(row) if row else {}

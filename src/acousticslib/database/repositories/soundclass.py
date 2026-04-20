@@ -392,6 +392,208 @@ class SoundClassificationRepository:
                 {"uid": user_id, "wav": wav_file, "loc": location},
             )
 
+    @staticmethod
+    @handle_repository_errors
+    def get_recent(user_id: int, location: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return up to *limit* most recent classifications by *user_id* at *location*."""
+        with get_session() as session:
+            rows = session.execute(
+                text(
+                    "SELECT sc.wav_file, scc.category_name, sc.timestamp, sc.comments "
+                    "FROM calltrackers.SoundClassification sc "
+                    "JOIN calltrackers.SoundClassCategory scc "
+                    "  ON scc.id = sc.classification_category_id "
+                    "WHERE sc.user_id = :uid AND sc.location = :loc "
+                    "ORDER BY sc.timestamp DESC "
+                    "LIMIT :lim"
+                ),
+                {"uid": user_id, "loc": location, "lim": limit},
+            ).mappings().all()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    @handle_repository_errors
+    def get_all_for_user_all_locations(user_id: int) -> Dict[str, set]:
+        """Return {location: set(wav_files)} for all classifications by *user_id*."""
+        with get_session() as session:
+            rows = session.execute(
+                text(
+                    "SELECT location, wav_file "
+                    "FROM calltrackers.SoundClassification "
+                    "WHERE user_id = :uid"
+                ),
+                {"uid": user_id},
+            ).mappings().all()
+        result: Dict[str, set] = {}
+        for row in rows:
+            result.setdefault(row["location"], set()).add(row["wav_file"])
+        return result
+
+    @staticmethod
+    @handle_repository_errors
+    def get_nplus_all_locations(n: int) -> Dict[str, set]:
+        """Return {location: set(wav_files)} for files with ≥ *n* distinct classifiers."""
+        with get_session() as session:
+            rows = session.execute(
+                text(
+                    "SELECT location, wav_file "
+                    "FROM calltrackers.SoundClassification "
+                    "GROUP BY location, wav_file "
+                    "HAVING COUNT(DISTINCT user_id) >= :n"
+                ),
+                {"n": n},
+            ).mappings().all()
+        result: Dict[str, set] = {}
+        for row in rows:
+            result.setdefault(row["location"], set()).add(row["wav_file"])
+        return result
+
+    @staticmethod
+    @handle_repository_errors
+    def get_audited_category_assignments(audit_threshold: int) -> Dict[str, List[str]]:
+        """Return {wav_file: [category_name, …]} for files meeting the audit threshold."""
+        with get_session() as session:
+            rows = session.execute(
+                text(
+                    "WITH audited AS ("
+                    "  SELECT wav_file FROM calltrackers.SoundClassification"
+                    "  GROUP BY wav_file HAVING COUNT(DISTINCT user_id) >= :n"
+                    ") "
+                    "SELECT sc.wav_file, scc.category_name "
+                    "FROM calltrackers.SoundClassification sc "
+                    "JOIN calltrackers.SoundClassCategory scc "
+                    "  ON sc.classification_category_id = scc.id "
+                    "WHERE sc.wav_file IN (SELECT wav_file FROM audited)"
+                ),
+                {"n": audit_threshold},
+            ).mappings().all()
+        result: Dict[str, List[str]] = {}
+        for row in rows:
+            result.setdefault(row["wav_file"], []).append(row["category_name"])
+        return result
+
+    @staticmethod
+    @handle_repository_errors
+    def get_admin_stats() -> Dict[str, Any]:
+        """Return aggregated user statistics: per-user counts, by-date, by-category."""
+        with get_session() as session:
+            count_rows = session.execute(
+                text(
+                    "SELECT u.id, u.username, u.full_name, u.last_login, "
+                    "       u.disabled, u.is_admin, "
+                    "       COUNT(sc.id)             AS classification_count, "
+                    "       SUM(sc.needs_discussion) AS discussion_flag_count, "
+                    "       MAX(sc.timestamp)        AS last_classification "
+                    "FROM calltrackers.users u "
+                    "LEFT JOIN calltrackers.SoundClassification sc ON sc.user_id = u.id "
+                    "GROUP BY u.id, u.username, u.full_name, u.last_login, "
+                    "         u.disabled, u.is_admin "
+                    "ORDER BY u.username"
+                )
+            ).mappings().all()
+            date_rows = session.execute(
+                text(
+                    "SELECT DATE(timestamp) AS date, COUNT(*) AS count "
+                    "FROM calltrackers.SoundClassification "
+                    "GROUP BY DATE(timestamp) "
+                    "ORDER BY DATE(timestamp)"
+                )
+            ).mappings().all()
+            cat_rows = session.execute(
+                text(
+                    "SELECT u.username, scc.category_name, COUNT(*) AS count "
+                    "FROM calltrackers.SoundClassification sc "
+                    "JOIN calltrackers.users u ON u.id = sc.user_id "
+                    "JOIN calltrackers.SoundClassCategory scc "
+                    "  ON scc.id = sc.classification_category_id "
+                    "GROUP BY u.username, scc.category_name "
+                    "ORDER BY u.username, scc.category_name"
+                )
+            ).mappings().all()
+        return {
+            "users": [dict(r) for r in count_rows],
+            "classifications_by_date": [dict(r) for r in date_rows],
+            "classifications_by_category_user": [dict(r) for r in cat_rows],
+        }
+
+    @staticmethod
+    @handle_repository_errors
+    def get_disagreements(min_classifiers: int = 2) -> List[Dict[str, Any]]:
+        """Return files classified by ≥ *min_classifiers* users with differing opinions."""
+        with get_session() as session:
+            rows = session.execute(
+                text(
+                    "SELECT sc.wav_file, sc.location, "
+                    "       COUNT(DISTINCT sc.user_id)                    AS classifier_count, "
+                    "       COUNT(DISTINCT sc.classification_category_id) AS category_count, "
+                    "       GROUP_CONCAT(DISTINCT scc.category_name "
+                    "                    ORDER BY scc.category_name)      AS categories, "
+                    "       GROUP_CONCAT(u.username "
+                    "                    ORDER BY sc.timestamp DESC "
+                    "                    SEPARATOR ', ')                  AS usernames, "
+                    "       MAX(sc.timestamp)                             AS last_classified "
+                    "FROM calltrackers.SoundClassification sc "
+                    "JOIN calltrackers.SoundClassCategory scc "
+                    "  ON scc.id = sc.classification_category_id "
+                    "JOIN calltrackers.users u ON u.id = sc.user_id "
+                    "GROUP BY sc.wav_file, sc.location "
+                    "HAVING classifier_count >= :min_clf AND category_count > 1 "
+                    "ORDER BY category_count DESC, sc.wav_file"
+                ),
+                {"min_clf": min_classifiers},
+            ).mappings().all()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    @handle_repository_errors
+    def get_recent_comments(limit: int = 100, search: str = "") -> List[Dict[str, Any]]:
+        """Return recent classifications with non-empty comments, optionally filtered."""
+        search_clause = "AND sc.comments LIKE :search " if search else ""
+        params: Dict[str, Any] = {"lim": limit}
+        if search:
+            params["search"] = f"%{search}%"
+        with get_session() as session:
+            rows = session.execute(
+                text(
+                    "SELECT u.username, sc.wav_file, sc.location, "
+                    "       scc.category_name, sc.comments, sc.timestamp, sc.needs_discussion "
+                    "FROM calltrackers.SoundClassification sc "
+                    "JOIN calltrackers.users u ON u.id = sc.user_id "
+                    "JOIN calltrackers.SoundClassCategory scc "
+                    "  ON scc.id = sc.classification_category_id "
+                    "WHERE sc.comments IS NOT NULL AND sc.comments != '' "
+                    + search_clause +
+                    "ORDER BY sc.timestamp DESC "
+                    "LIMIT :lim"
+                ),
+                params,
+            ).mappings().all()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    @handle_repository_errors
+    def get_discussion_summary() -> List[Dict[str, Any]]:
+        """Return files with discussion flags, ordered by flag count descending."""
+        with get_session() as session:
+            rows = session.execute(
+                text(
+                    "SELECT sc.wav_file, sc.location, "
+                    "       SUM(sc.needs_discussion)                             AS flag_count, "
+                    "       GROUP_CONCAT(DISTINCT u.username ORDER BY u.username) AS flagged_by, "
+                    "       GROUP_CONCAT(DISTINCT scc.category_name "
+                    "                    ORDER BY scc.category_name)            AS categories "
+                    "FROM calltrackers.SoundClassification sc "
+                    "JOIN calltrackers.users u ON u.id = sc.user_id "
+                    "JOIN calltrackers.SoundClassCategory scc "
+                    "  ON scc.id = sc.classification_category_id "
+                    "GROUP BY sc.wav_file, sc.location "
+                    "HAVING flag_count > 0 "
+                    "ORDER BY flag_count DESC "
+                    "LIMIT 200"
+                )
+            ).mappings().all()
+        return [dict(r) for r in rows]
+
 
 class CallLibraryRepository:
     """Reference call library entries."""
@@ -465,3 +667,120 @@ class CallLibraryRepository:
                     "fn": filename,
                 },
             )
+
+    @staticmethod
+    @handle_repository_errors
+    def get_all_with_classifier() -> List[Dict[str, Any]]:
+        """Return all call library rows with the associated classifier name."""
+        with get_session() as session:
+            rows = session.execute(
+                text(
+                    "SELECT cl.id, cl.file_name, cl.title, cl.description, "
+                    "       cl.scientific_name, cl.english_name, cl.classifier_id, "
+                    "       sc.name AS classifier_name "
+                    "FROM calltrackers.CallLibrary cl "
+                    "LEFT JOIN calltrackers.SoundClassClassifier sc "
+                    "  ON cl.classifier_id = sc.id "
+                    "ORDER BY cl.file_name"
+                )
+            ).mappings().all()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    @handle_repository_errors
+    def update_classifier(filename: str, classifier_id: Optional[int]) -> None:
+        """Set the classifier_id for *filename* (None = applies to all classifiers)."""
+        with get_session() as session:
+            session.execute(
+                text(
+                    "UPDATE calltrackers.CallLibrary "
+                    "SET classifier_id = :cid WHERE file_name = :fn"
+                ),
+                {"cid": classifier_id, "fn": filename},
+            )
+
+
+class SoundClassClassifierRepository:
+    """Data access layer for SoundClassClassifier and its category assignments."""
+
+    @staticmethod
+    @handle_repository_errors
+    def get_all() -> List[Dict[str, Any]]:
+        """Return all classifiers ordered by id."""
+        with get_session() as session:
+            rows = session.execute(
+                text(
+                    "SELECT id, name, description "
+                    "FROM calltrackers.SoundClassClassifier ORDER BY id"
+                )
+            ).mappings().all()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    @handle_repository_errors
+    def get_categories_for(classifier_name: str) -> List[tuple]:
+        """Return [(id, category_name)] for categories assigned to *classifier_name*."""
+        with get_session() as session:
+            rows = session.execute(
+                text(
+                    "SELECT scc.id, scc.category_name "
+                    "FROM calltrackers.SoundClassCategory scc "
+                    "JOIN calltrackers.SoundClassClassifierCategory sccc "
+                    "  ON scc.id = sccc.category_id "
+                    "JOIN calltrackers.SoundClassClassifier sc "
+                    "  ON sc.id = sccc.classifier_id "
+                    "WHERE sc.name = :name "
+                    "ORDER BY scc.id"
+                ),
+                {"name": classifier_name},
+            ).mappings().all()
+        return [(r["id"], r["category_name"]) for r in rows]
+
+    @staticmethod
+    @handle_repository_errors
+    def get_category_map() -> Dict[int, List[str]]:
+        """Return {category_id: [classifier_name, …]} for all assignments."""
+        with get_session() as session:
+            rows = session.execute(
+                text(
+                    "SELECT sccc.category_id, sc.name AS classifier_name "
+                    "FROM calltrackers.SoundClassClassifierCategory sccc "
+                    "JOIN calltrackers.SoundClassClassifier sc "
+                    "  ON sc.id = sccc.classifier_id"
+                )
+            ).mappings().all()
+        result: Dict[int, List[str]] = {}
+        for row in rows:
+            result.setdefault(row["category_id"], []).append(row["classifier_name"])
+        return result
+
+    @staticmethod
+    @handle_repository_errors
+    def set_category_assignments(category_id: int, classifier_names: List[str]) -> None:
+        """Replace all classifier assignments for *category_id*."""
+        with get_session() as session:
+            clf_ids = []
+            for name in classifier_names:
+                row = session.execute(
+                    text(
+                        "SELECT id FROM calltrackers.SoundClassClassifier WHERE name = :name"
+                    ),
+                    {"name": name},
+                ).mappings().first()
+                if row:
+                    clf_ids.append(row["id"])
+            session.execute(
+                text(
+                    "DELETE FROM calltrackers.SoundClassClassifierCategory "
+                    "WHERE category_id = :cat"
+                ),
+                {"cat": category_id},
+            )
+            for clf_id in clf_ids:
+                session.execute(
+                    text(
+                        "INSERT IGNORE INTO calltrackers.SoundClassClassifierCategory "
+                        "(classifier_id, category_id) VALUES (:clf, :cat)"
+                    ),
+                    {"clf": clf_id, "cat": category_id},
+                )
