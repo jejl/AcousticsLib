@@ -17,6 +17,7 @@ from .soundclass import (
     SoundClassClassifierRepository,
 )
 from .users import UserRepository
+from .weather import WeatherRepository
 
 __all__ = [
     "CallLibraryRepository",
@@ -41,4 +42,5 @@ __all__ = [
     "SoundClassUserConfigRepository",
     "SoundClassificationRepository",
     "UserRepository",
+    "WeatherRepository",
 ]
