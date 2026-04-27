@@ -89,13 +89,24 @@ class KitMaintenanceRepository:
         Idempotent: uses INSERT IGNORE so re-running is safe.
         """
         with get_session() as session:
-            # One check row per active template item
+            # One check row per active template item, respecting conditions.
+            # Conditional items (condition_key IS NOT NULL) are included only
+            # when the kit's matching attribute equals condition_value.
+            # To add a new condition type, add a new OR branch below and
+            # the corresponding column to calltrackers.Kit.
             session.execute(text("""
                 INSERT IGNORE INTO calltrackers.KitItemCheck
                     (session_id, item_id, quantity_needed, acquired)
-                SELECT :sid, id, 0, 0
-                FROM calltrackers.KitItemTemplate
-                WHERE active = 1
+                SELECT :sid, t.id, 0, 0
+                FROM calltrackers.KitItemTemplate t
+                JOIN calltrackers.KitMaintenanceSession s ON s.id = :sid
+                JOIN calltrackers.Kit k ON k.id = s.kit_id
+                WHERE t.active = 1
+                  AND (
+                    t.condition_key IS NULL
+                    OR (t.condition_key = 'bolt_head_type'
+                        AND t.condition_value = k.bolt_head_type)
+                  )
             """), {"sid": session_id})
 
             # One task-check row per task for each item check
@@ -144,22 +155,33 @@ class KitMaintenanceRepository:
     def get_items_with_checks(session_id: int) -> List[Dict[str, Any]]:
         """Return template items joined to their check row for this session.
 
-        Active items are always included.  Retired (inactive) items are also
-        included when they already have a check row in this session — so that
-        retiring an item mid-session doesn't silently drop recorded data.
+        Active items that match the kit's conditions are included.  Items that
+        don't match the condition but already have a historical check row are
+        also included (so mid-session config changes don't drop recorded data).
+        Retired items follow the same historical-preservation rule.
         """
         with get_session() as session:
             return session.execute(text("""
                 SELECT
                     t.id AS item_id, t.item_name, t.quantity_type,
                     t.min_quantity, t.notes AS item_notes, t.sort_order,
-                    t.active,
+                    t.active, t.condition_key, t.condition_value,
                     c.id AS check_id, c.present, c.actual_quantity,
                     c.quantity_needed, c.acquired, c.notes AS check_notes
                 FROM calltrackers.KitItemTemplate t
+                JOIN calltrackers.KitMaintenanceSession s ON s.id = :sid
+                JOIN calltrackers.Kit k ON k.id = s.kit_id
                 LEFT JOIN calltrackers.KitItemCheck c
                     ON c.item_id = t.id AND c.session_id = :sid
-                WHERE t.active = 1 OR c.id IS NOT NULL
+                WHERE (
+                    t.active = 1
+                    AND (
+                        t.condition_key IS NULL
+                        OR (t.condition_key = 'bolt_head_type'
+                            AND t.condition_value = k.bolt_head_type)
+                    )
+                )
+                OR c.id IS NOT NULL
                 ORDER BY t.sort_order, t.id
             """), {"sid": session_id}).mappings().all()
 
@@ -168,7 +190,7 @@ class KitMaintenanceRepository:
     def get_tasks_with_checks(session_id: int) -> List[Dict[str, Any]]:
         """Return tasks joined to their completion row for this session.
 
-        Mirrors the same active/historical logic as get_items_with_checks.
+        Mirrors the same active/condition/historical logic as get_items_with_checks.
         """
         with get_session() as session:
             return session.execute(text("""
@@ -180,11 +202,21 @@ class KitMaintenanceRepository:
                     tc.notes AS task_check_notes
                 FROM calltrackers.KitItemTemplate t
                 JOIN calltrackers.KitItemTask tk ON tk.item_id = t.id
+                JOIN calltrackers.KitMaintenanceSession s ON s.id = :sid
+                JOIN calltrackers.Kit k ON k.id = s.kit_id
                 LEFT JOIN calltrackers.KitItemCheck c
                     ON c.item_id = t.id AND c.session_id = :sid
                 LEFT JOIN calltrackers.KitItemTaskCheck tc
                     ON tc.task_id = tk.id AND tc.item_check_id = c.id
-                WHERE t.active = 1 OR c.id IS NOT NULL
+                WHERE (
+                    t.active = 1
+                    AND (
+                        t.condition_key IS NULL
+                        OR (t.condition_key = 'bolt_head_type'
+                            AND t.condition_value = k.bolt_head_type)
+                    )
+                )
+                OR c.id IS NOT NULL
                 ORDER BY t.sort_order, tk.sort_order
             """), {"sid": session_id}).mappings().all()
 
@@ -315,15 +347,20 @@ class KitMaintenanceRepository:
         min_quantity: int,
         notes: Optional[str],
         sort_order: int,
+        condition_key: Optional[str] = None,
+        condition_value: Optional[str] = None,
     ) -> int:
         with get_session() as session:
             result = session.execute(text("""
                 INSERT INTO calltrackers.KitItemTemplate
-                    (item_name, quantity_type, min_quantity, notes, sort_order, active)
-                VALUES (:name, :qtype, :minq, :notes, :sort, 1)
+                    (item_name, quantity_type, min_quantity, notes, sort_order,
+                     active, condition_key, condition_value)
+                VALUES (:name, :qtype, :minq, :notes, :sort,
+                        1, :ckey, :cval)
             """), {
                 "name": item_name, "qtype": quantity_type,
                 "minq": min_quantity, "notes": notes, "sort": sort_order,
+                "ckey": condition_key, "cval": condition_value,
             })
             return result.lastrowid
 
@@ -337,17 +374,21 @@ class KitMaintenanceRepository:
         notes: Optional[str],
         sort_order: int,
         active: bool,
+        condition_key: Optional[str] = None,
+        condition_value: Optional[str] = None,
     ) -> None:
         with get_session() as session:
             session.execute(text("""
                 UPDATE calltrackers.KitItemTemplate
                 SET item_name=:name, quantity_type=:qtype, min_quantity=:minq,
-                    notes=:notes, sort_order=:sort, active=:active
+                    notes=:notes, sort_order=:sort, active=:active,
+                    condition_key=:ckey, condition_value=:cval
                 WHERE id=:iid
             """), {
                 "name": item_name, "qtype": quantity_type, "minq": min_quantity,
                 "notes": notes, "sort": sort_order,
                 "active": int(active), "iid": item_id,
+                "ckey": condition_key, "cval": condition_value,
             })
 
     @staticmethod
