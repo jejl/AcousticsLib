@@ -461,6 +461,12 @@ class KitMaintenanceRepository:
                 "DELETE FROM calltrackers.KitItemCheck WHERE item_id = :iid"
             ), {"iid": item_id})
             session.execute(text(
+                "DELETE FROM calltrackers.KitItemSupplierPrice WHERE item_id = :iid"
+            ), {"iid": item_id})
+            session.execute(text(
+                "DELETE FROM calltrackers.KitSpareStock WHERE item_id = :iid"
+            ), {"iid": item_id})
+            session.execute(text(
                 "DELETE FROM calltrackers.KitItemTemplate WHERE id = :iid"
             ), {"iid": item_id})
 
