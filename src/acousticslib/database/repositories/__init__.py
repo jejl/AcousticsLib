@@ -1,4 +1,5 @@
 """acousticslib.database.repositories — one module per table group."""
+from .docs import DocsRepository
 from .kit import KitRepository, KitRecorderRepository, KitCustodianRepository
 from .kit_maintenance import KitMaintenanceRepository
 from .metadata import MetadataRepository
@@ -21,6 +22,7 @@ from .weather import WeatherRepository
 
 __all__ = [
     "CallLibraryRepository",
+    "DocsRepository",
     "ClassifierStatusRepository",
     "CustodianRepository",
     "DataAvailabilityRepository",
