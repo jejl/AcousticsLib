@@ -387,3 +387,31 @@ class KitMaintenanceRepository:
             session.execute(text(
                 "DELETE FROM calltrackers.KitItemTask WHERE id=:tid"
             ), {"tid": task_id})
+
+    @staticmethod
+    @handle_repository_errors
+    def delete_template_item(item_id: int) -> None:
+        """Permanently delete a template item and all associated records.
+
+        Removes KitItemTaskCheck, KitItemTask, KitItemCheck, and the
+        KitItemTemplate row itself.  Only safe to call on retired (active=0)
+        items; caller is responsible for enforcing that guard.
+        """
+        with get_session() as session:
+            # Remove task-check rows that belong to tasks or checks of this item
+            session.execute(text("""
+                DELETE tc
+                FROM calltrackers.KitItemTaskCheck tc
+                LEFT JOIN calltrackers.KitItemTask   tk ON tk.id = tc.task_id
+                LEFT JOIN calltrackers.KitItemCheck  ic ON ic.id = tc.item_check_id
+                WHERE tk.item_id = :iid OR ic.item_id = :iid
+            """), {"iid": item_id})
+            session.execute(text(
+                "DELETE FROM calltrackers.KitItemTask WHERE item_id = :iid"
+            ), {"iid": item_id})
+            session.execute(text(
+                "DELETE FROM calltrackers.KitItemCheck WHERE item_id = :iid"
+            ), {"iid": item_id})
+            session.execute(text(
+                "DELETE FROM calltrackers.KitItemTemplate WHERE id = :iid"
+            ), {"iid": item_id})
