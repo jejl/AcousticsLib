@@ -18,12 +18,28 @@ class DocsRepository:
     @staticmethod
     @handle_repository_errors
     def get_all_pages() -> List[Dict[str, Any]]:
-        """Return top-level pages only (variant_of IS NULL), ordered by sort_order."""
+        """Return all top-level pages (variant_of IS NULL), ordered by sort_order."""
         with get_session() as session:
             rows = session.execute(text("""
-                SELECT id, title, content, sort_order, updated_at, updated_by
+                SELECT id, title, content, sort_order, updated_at, updated_by,
+                       COALESCE(section_type, 'internal') AS section_type
                 FROM calltrackers.DocPage
                 WHERE variant_of IS NULL
+                ORDER BY sort_order, id
+            """)).mappings().all()
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    @handle_repository_errors
+    def get_public_pages() -> List[Dict[str, Any]]:
+        """Return only public-guide pages (section_type='public'), ordered by sort_order."""
+        with get_session() as session:
+            rows = session.execute(text("""
+                SELECT id, title, content, sort_order, updated_at, updated_by,
+                       COALESCE(section_type, 'internal') AS section_type
+                FROM calltrackers.DocPage
+                WHERE variant_of IS NULL
+                  AND COALESCE(section_type, 'internal') = 'public'
                 ORDER BY sort_order, id
             """)).mappings().all()
             return [dict(r) for r in rows]
@@ -50,28 +66,33 @@ class DocsRepository:
         sort_order: int,
         updated_by: str,
         variant_of: Optional[int] = None,
+        section_type: str = "internal",
     ) -> int:
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         with get_session() as session:
             if page_id is None:
                 result = session.execute(text("""
                     INSERT INTO calltrackers.DocPage
-                        (title, content, sort_order, updated_at, updated_by, variant_of)
-                    VALUES (:title, :content, :sort_order, :now, :by, :vof)
+                        (title, content, sort_order, updated_at, updated_by,
+                         variant_of, section_type)
+                    VALUES (:title, :content, :sort_order, :now, :by, :vof, :st)
                 """), {"title": title, "content": content, "sort_order": sort_order,
-                       "now": now, "by": updated_by, "vof": variant_of})
+                       "now": now, "by": updated_by, "vof": variant_of,
+                       "st": section_type})
                 return result.lastrowid
             else:
                 session.execute(text("""
                     UPDATE calltrackers.DocPage
-                    SET title      = :title,
-                        content    = :content,
-                        sort_order = :sort_order,
-                        updated_at = :now,
-                        updated_by = :by
+                    SET title        = :title,
+                        content      = :content,
+                        sort_order   = :sort_order,
+                        updated_at   = :now,
+                        updated_by   = :by,
+                        section_type = :st
                     WHERE id = :id
                 """), {"title": title, "content": content, "sort_order": sort_order,
-                       "now": now, "by": updated_by, "id": page_id})
+                       "now": now, "by": updated_by, "id": page_id,
+                       "st": section_type})
                 return page_id
 
     @staticmethod
