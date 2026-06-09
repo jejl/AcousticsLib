@@ -29,7 +29,7 @@ class ServiceNotesRepository:
         with get_session() as session:
             return session.execute(
                 text(
-                    "SELECT service_date, recorder_id, kit_id, notes, technician "
+                    "SELECT id, service_date, recorder_id, kit_id, notes, technician "
                     "FROM calltrackers.ServiceNotes "
                     "WHERE recorder_id = :rid ORDER BY service_date ASC"
                 ),
@@ -43,7 +43,7 @@ class ServiceNotesRepository:
         with get_session() as session:
             return session.execute(
                 text(
-                    "SELECT service_date, recorder_id, kit_id, notes, technician "
+                    "SELECT id, service_date, recorder_id, kit_id, notes, technician "
                     "FROM calltrackers.ServiceNotes "
                     "WHERE kit_id = :kit_id ORDER BY service_date ASC"
                 ),

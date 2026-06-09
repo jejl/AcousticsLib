@@ -1,4 +1,4 @@
-# AcousticsLib
+# CallTrackersLib
 
 Shared Python library for managing CallTrackers logistics, hardware 
 maintanance, observations, data analysis and reporting. Consumed by 
@@ -10,7 +10,7 @@ array recordings.
 ## Package layout
 
 ```
-src/acousticslib/
+src/CallTrackersLib/
 ├── audio/              WAV metadata extraction, DSP filters, spectrogram generation, file I/O
 ├── database/
 │   ├── connection.py   SQLAlchemy session factory (get_session)
@@ -31,7 +31,7 @@ src/acousticslib/
 All SQL lives in `database/repositories/`. Each class is a collection of `@staticmethod` methods decorated with `@handle_repository_errors`. Import from the package level:
 
 ```python
-from acousticslib.database.repositories import (
+from CallTrackersLib.database.repositories import (
     RecorderRepository, ObservationRepository, MetadataRepository,
     ResultsRepository, KitRepository, UserRepository, ...
 )
@@ -59,7 +59,7 @@ from acousticslib.database.repositories import (
 ### Environment
 
 ```bash
-cd /path/to/AcousticsLib
+cd /path/to/CallTrackersLib
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"   # or: uv sync
 ```
@@ -74,11 +74,11 @@ Tests use `unittest.mock` to patch repository methods; they do not require a liv
 
 ### Updating downstream consumers
 
-Both CallTrackersAdmin and SoundClass install acousticslib via `uv` from git. After pushing changes here:
+Both CallTrackersAdmin and SoundClass install CallTrackersLib via `uv` from git. After pushing changes here:
 
 ```bash
 # In CallTrackersAdmin or SoundClass repo root:
-uv sync --upgrade-package acousticslib
+uv sync --upgrade-package CallTrackersLib
 ```
 
 ## Error handling
