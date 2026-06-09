@@ -24,6 +24,16 @@ class ServiceNotesRepository:
 
     @staticmethod
     @handle_repository_errors
+    def get_by_id(note_id: int) -> Optional[Dict[str, Any]]:
+        """Return a single service note by id, or None if not found."""
+        with get_session() as session:
+            return session.execute(
+                text("SELECT * FROM calltrackers.ServiceNotes WHERE id = :id"),
+                {"id": note_id},
+            ).mappings().first()
+
+    @staticmethod
+    @handle_repository_errors
     def get_by_recorder_id(recorder_id: int) -> List[Dict[str, Any]]:
         """Return all service notes for a recorder ordered by date ascending."""
         with get_session() as session:
