@@ -67,6 +67,16 @@ class SoundClassUserConfigRepository:
 
     @staticmethod
     @handle_repository_errors
+    def delete(user_id: int) -> None:
+        """Delete the config row for *user_id*, if any."""
+        with get_session() as session:
+            session.execute(
+                text("DELETE FROM calltrackers.SoundClassUserConfig WHERE user_id = :uid"),
+                {"uid": user_id},
+            )
+
+    @staticmethod
+    @handle_repository_errors
     def set(
         user_id: int,
         freq_min: int,
