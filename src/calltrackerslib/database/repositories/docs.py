@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
 
@@ -22,13 +22,36 @@ def _ensure_guide_version_table() -> None:
     with get_session() as session:
         session.execute(text("""
             CREATE TABLE IF NOT EXISTS calltrackers.DocGuideVersion (
-                guide_type  VARCHAR(50)  NOT NULL,
-                version     INT          NOT NULL DEFAULT 1,
-                updated_at  DATETIME     NOT NULL,
-                updated_by  VARCHAR(100) NOT NULL,
+                guide_type     VARCHAR(50)  NOT NULL,
+                version_major  INT          NOT NULL DEFAULT 1,
+                version_minor  INT          NOT NULL DEFAULT 0,
+                version_patch  INT          NOT NULL DEFAULT 0,
+                updated_at     DATETIME     NOT NULL,
+                updated_by     VARCHAR(100) NOT NULL,
                 PRIMARY KEY (guide_type)
             )
         """))
+        # Migrate: if the legacy single-integer `version` column exists, convert it
+        cols = {
+            row[0] for row in session.execute(text("""
+                SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = 'calltrackers'
+                  AND TABLE_NAME   = 'DocGuideVersion'
+            """)).all()
+        }
+        if "version" in cols and "version_major" not in cols:
+            session.execute(text("""
+                ALTER TABLE calltrackers.DocGuideVersion
+                  ADD COLUMN version_major INT NOT NULL DEFAULT 1,
+                  ADD COLUMN version_minor INT NOT NULL DEFAULT 0,
+                  ADD COLUMN version_patch INT NOT NULL DEFAULT 0
+            """))
+            session.execute(text(
+                "UPDATE calltrackers.DocGuideVersion SET version_major = version"
+            ))
+            session.execute(text(
+                "ALTER TABLE calltrackers.DocGuideVersion DROP COLUMN version"
+            ))
     _guide_version_table_ensured = True
 
 
@@ -211,7 +234,8 @@ class DocsRepository:
         _ensure_guide_version_table()
         with get_session() as session:
             row = session.execute(text("""
-                SELECT guide_type, version, updated_at, updated_by
+                SELECT guide_type, version_major, version_minor, version_patch,
+                       updated_at, updated_by
                 FROM calltrackers.DocGuideVersion
                 WHERE guide_type = :gt
             """), {"gt": guide_type}).mappings().first()
@@ -219,24 +243,45 @@ class DocsRepository:
 
     @staticmethod
     @handle_repository_errors
-    def bump_guide_version(guide_type: str, updated_by: str) -> int:
+    def bump_guide_version(
+        guide_type: str, updated_by: str, bump_type: str = "minor"
+    ) -> Tuple[int, int, int]:
+        """Increment version_major, version_minor, or version_patch per SemVer rules.
+
+        bump_type: "major" resets minor+patch to 0; "minor" resets patch to 0;
+                   "patch" increments patch only.
+        """
         _ensure_guide_version_table()
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         with get_session() as session:
-            existing = session.execute(text("""
-                SELECT version FROM calltrackers.DocGuideVersion WHERE guide_type = :gt
-            """), {"gt": guide_type}).scalar()
-            if existing is None:
+            row = session.execute(text("""
+                SELECT version_major, version_minor, version_patch
+                FROM calltrackers.DocGuideVersion WHERE guide_type = :gt
+            """), {"gt": guide_type}).mappings().first()
+            if row is None:
+                major, minor, patch = 1, 0, 0
                 session.execute(text("""
                     INSERT INTO calltrackers.DocGuideVersion
-                        (guide_type, version, updated_at, updated_by)
-                    VALUES (:gt, 1, :now, :by)
-                """), {"gt": guide_type, "now": now, "by": updated_by})
-                return 1
-            new_ver = existing + 1
-            session.execute(text("""
-                UPDATE calltrackers.DocGuideVersion
-                SET version = :v, updated_at = :now, updated_by = :by
-                WHERE guide_type = :gt
-            """), {"v": new_ver, "now": now, "by": updated_by, "gt": guide_type})
-            return new_ver
+                        (guide_type, version_major, version_minor, version_patch,
+                         updated_at, updated_by)
+                    VALUES (:gt, :maj, :min, :pat, :now, :by)
+                """), {"gt": guide_type, "maj": major, "min": minor, "pat": patch,
+                       "now": now, "by": updated_by})
+            else:
+                major = row["version_major"]
+                minor = row["version_minor"]
+                patch = row["version_patch"]
+                if bump_type == "major":
+                    major, minor, patch = major + 1, 0, 0
+                elif bump_type == "minor":
+                    major, minor, patch = major, minor + 1, 0
+                else:
+                    major, minor, patch = major, minor, patch + 1
+                session.execute(text("""
+                    UPDATE calltrackers.DocGuideVersion
+                    SET version_major = :maj, version_minor = :min, version_patch = :pat,
+                        updated_at = :now, updated_by = :by
+                    WHERE guide_type = :gt
+                """), {"maj": major, "min": minor, "pat": patch,
+                       "now": now, "by": updated_by, "gt": guide_type})
+            return major, minor, patch
