@@ -100,18 +100,20 @@ class ObservationRepository:
             if recorder_id:
                 rows = session.execute(
                     text(
-                        "SELECT id, start_time, end_time, recorder_id, "
+                        "SELECT id, obscode, start_time, end_time, recorder_id, "
                         "square, lat, lon, program_id "
-                        "FROM calltrackers.LocationLog WHERE recorder_id = :rid"
+                        "FROM calltrackers.LocationLog WHERE recorder_id = :rid "
+                        "ORDER BY start_time"
                     ),
                     {"rid": recorder_id},
                 ).mappings().all()
             else:
                 rows = session.execute(
                     text(
-                        "SELECT id, start_time, end_time, recorder_id, "
+                        "SELECT id, obscode, start_time, end_time, recorder_id, "
                         "square, lat, lon, program_id "
-                        "FROM calltrackers.LocationLog"
+                        "FROM calltrackers.LocationLog "
+                        "ORDER BY start_time"
                     )
                 ).mappings().all()
 
