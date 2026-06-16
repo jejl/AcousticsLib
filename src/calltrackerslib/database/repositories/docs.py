@@ -10,8 +10,30 @@ from ...error_handlers import handle_repository_errors
 from ..connection import get_session
 
 
+# ── DocGuideVersion table bootstrap ───────────────────────────────────────────
+
+_guide_version_table_ensured = False
+
+
+def _ensure_guide_version_table() -> None:
+    global _guide_version_table_ensured
+    if _guide_version_table_ensured:
+        return
+    with get_session() as session:
+        session.execute(text("""
+            CREATE TABLE IF NOT EXISTS calltrackers.DocGuideVersion (
+                guide_type  VARCHAR(50)  NOT NULL,
+                version     INT          NOT NULL DEFAULT 1,
+                updated_at  DATETIME     NOT NULL,
+                updated_by  VARCHAR(100) NOT NULL,
+                PRIMARY KEY (guide_type)
+            )
+        """))
+    _guide_version_table_ensured = True
+
+
 class DocsRepository:
-    """CRUD operations for calltrackers.DocPage and DocRecorderType."""
+    """CRUD operations for calltrackers.DocPage, DocRecorderType, and DocGuideVersion."""
 
     # ── DocPage ────────────────────────────────────────────────────────────────
 
@@ -180,3 +202,41 @@ class DocsRepository:
                 ORDER BY label
             """)).mappings().all()
             return [r["label"] for r in rows]
+
+    # ── DocGuideVersion ────────────────────────────────────────────────────────
+
+    @staticmethod
+    @handle_repository_errors
+    def get_guide_version(guide_type: str) -> Optional[Dict[str, Any]]:
+        _ensure_guide_version_table()
+        with get_session() as session:
+            row = session.execute(text("""
+                SELECT guide_type, version, updated_at, updated_by
+                FROM calltrackers.DocGuideVersion
+                WHERE guide_type = :gt
+            """), {"gt": guide_type}).mappings().first()
+            return dict(row) if row else None
+
+    @staticmethod
+    @handle_repository_errors
+    def bump_guide_version(guide_type: str, updated_by: str) -> int:
+        _ensure_guide_version_table()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        with get_session() as session:
+            existing = session.execute(text("""
+                SELECT version FROM calltrackers.DocGuideVersion WHERE guide_type = :gt
+            """), {"gt": guide_type}).scalar()
+            if existing is None:
+                session.execute(text("""
+                    INSERT INTO calltrackers.DocGuideVersion
+                        (guide_type, version, updated_at, updated_by)
+                    VALUES (:gt, 1, :now, :by)
+                """), {"gt": guide_type, "now": now, "by": updated_by})
+                return 1
+            new_ver = existing + 1
+            session.execute(text("""
+                UPDATE calltrackers.DocGuideVersion
+                SET version = :v, updated_at = :now, updated_by = :by
+                WHERE guide_type = :gt
+            """), {"v": new_ver, "now": now, "by": updated_by, "gt": guide_type})
+            return new_ver
