@@ -13,6 +13,7 @@ Public surface:
     forgot_password_layout / register_forgot_password_callback
     reset_password_layout / register_reset_password_callback
     make_navbar                     — base navbar factory
+    make_upload_zone                 — native drag-and-drop file upload zone
 """
 from .user import AuthUser
 from .flask_login_setup import setup_login_manager
@@ -25,6 +26,7 @@ from .password_reset import (
     register_reset_password_callback,
 )
 from .navbar import make_navbar
+from .upload_zone import make_upload_zone
 
 __all__ = [
     "AuthUser",
@@ -37,4 +39,5 @@ __all__ = [
     "reset_password_layout",
     "register_reset_password_callback",
     "make_navbar",
+    "make_upload_zone",
 ]
