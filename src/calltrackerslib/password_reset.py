@@ -202,9 +202,11 @@ class PasswordResetService:
         # ── Email user ────────────────────────────────────────────────────────
         reset_url = f"{app_url.rstrip('/')}?reset_token={token}"
         name      = user.get("full_name") or user.get("username", "")
+        username  = user.get("username", "")
         body = (
             f"Hi {name},\n\n"
             f"A password reset was requested for your account.\n\n"
+            f"Your username is: {username}\n\n"
             f"Click the link below to set a new password. "
             f"This link expires in {_EXPIRY_HOURS} hour(s):\n\n"
             f"    {reset_url}\n\n"

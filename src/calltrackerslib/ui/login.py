@@ -30,8 +30,14 @@ from flask_login import login_user
 from .user import AuthUser
 
 
-def login_layout(app_title: str, url_prefix: str = "", show_forgot: bool = True):
-    """Return the centred login card layout for *app_title*."""
+def login_layout(app_title: str, url_prefix: str = "", show_forgot: bool = True,
+                  username_label: str = "Username"):
+    """Return the centred login card layout for *app_title*.
+
+    *username_label* lets a caller advertise that the username field also
+    accepts an email address (only do this if the app's ``authenticate``
+    callable actually supports email lookup — see register_login_callback).
+    """
     footer = None
     if show_forgot:
         footer = dbc.CardFooter(
@@ -46,8 +52,8 @@ def login_layout(app_title: str, url_prefix: str = "", show_forgot: bool = True)
         dbc.CardHeader(html.H4(app_title, className="mb-0 text-center")),
         dbc.CardBody([
             html.P("Sign in to continue.", className="text-muted text-center mb-4"),
-            dbc.Label("Username"),
-            dbc.Input(id="login-username", type="text", placeholder="Username",
+            dbc.Label(username_label),
+            dbc.Input(id="login-username", type="text", placeholder=username_label,
                       className="mb-3", autofocus=True),
             dbc.Label("Password"),
             dbc.Input(id="login-password", type="password", placeholder="Password",
