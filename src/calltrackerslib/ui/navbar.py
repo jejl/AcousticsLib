@@ -47,6 +47,11 @@ def make_navbar(
             dbc.DropdownMenuItem(
                 [html.I(className="bi bi-box-arrow-right me-2"), "Sign out"],
                 href=logout_href,
+                # /logout is a plain Flask route, not a registered Dash page.
+                # Without this, dbc's default client-side routing intercepts
+                # the click and Dash's page_container renders its own 404
+                # (no page matches "/logout") instead of hitting the real route.
+                external_link=True,
             ),
         ],
     )
