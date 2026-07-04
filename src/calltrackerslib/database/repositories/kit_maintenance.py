@@ -194,6 +194,11 @@ class KitMaintenanceRepository:
         don't match the condition but already have a historical check row are
         also included (so mid-session config changes don't drop recorded data).
         Retired items follow the same historical-preservation rule.
+
+        acquired is derived live from KitItemAllocation (any reserved or
+        transferred row for this item/session) rather than the legacy
+        KitItemCheck.acquired flag, which the reservation lifecycle no longer
+        writes to.
         """
         with get_session() as session:
             return session.execute(text("""
@@ -202,7 +207,12 @@ class KitMaintenanceRepository:
                     t.min_quantity, t.notes AS item_notes, t.sort_order,
                     t.active, t.condition_key, t.condition_value,
                     c.id AS check_id, c.present, c.actual_quantity,
-                    c.quantity_needed, c.acquired, c.notes AS check_notes
+                    c.quantity_needed,
+                    EXISTS (
+                        SELECT 1 FROM calltrackers.KitItemAllocation alloc
+                        WHERE alloc.item_id = t.id AND alloc.session_id = :sid
+                    ) AS acquired,
+                    c.notes AS check_notes
                 FROM calltrackers.KitItemTemplate t
                 JOIN calltrackers.KitMaintenanceSession s ON s.id = :sid
                 JOIN calltrackers.Kit k ON k.id = s.kit_id
@@ -320,12 +330,64 @@ class KitMaintenanceRepository:
     @staticmethod
     @handle_repository_errors
     def mark_acquired(check_id: int, acquired: int) -> None:
-        """Toggle the acquired flag on a KitItemCheck row."""
+        """Reserve or cancel-reserve stock for this checklist item.
+
+        Replaces the old KitItemCheck.acquired flag with a KitItemAllocation
+        row: ticking reserves the live-computed needed quantity (updating the
+        existing reservation if one is already 'reserved'); unticking cancels
+        a still-'reserved' allocation. Neither touches KitSpareStock — physical
+        consumption is tracked separately via the checklist's actual-quantity
+        delta logic in KitSessionService.save_checklist.
+        """
+        with get_session() as session:
+            row = session.execute(text("""
+                SELECT c.item_id, c.session_id, c.actual_quantity,
+                       t.min_quantity, t.quantity_type
+                FROM calltrackers.KitItemCheck c
+                JOIN calltrackers.KitItemTemplate t ON t.id = c.item_id
+                WHERE c.id = :cid
+            """), {"cid": check_id}).mappings().first()
+            if not row:
+                return
+            item_id, sid = row["item_id"], row["session_id"]
+
+            if acquired:
+                if row["quantity_type"] == "quantity":
+                    qty = max(1, (row["min_quantity"] or 0) - (row["actual_quantity"] or 0))
+                else:
+                    qty = 1
+                existing = session.execute(text("""
+                    SELECT id FROM calltrackers.KitItemAllocation
+                    WHERE item_id = :iid AND session_id = :sid AND status = 'reserved'
+                """), {"iid": item_id, "sid": sid}).first()
+                if existing:
+                    session.execute(text("""
+                        UPDATE calltrackers.KitItemAllocation SET quantity = :qty WHERE id = :id
+                    """), {"qty": qty, "id": existing[0]})
+                else:
+                    session.execute(text("""
+                        INSERT INTO calltrackers.KitItemAllocation (item_id, session_id, quantity, status)
+                        VALUES (:iid, :sid, :qty, 'reserved')
+                    """), {"iid": item_id, "sid": sid, "qty": qty})
+            else:
+                session.execute(text("""
+                    DELETE FROM calltrackers.KitItemAllocation
+                    WHERE item_id = :iid AND session_id = :sid AND status = 'reserved'
+                """), {"iid": item_id, "sid": sid})
+
+    @staticmethod
+    @handle_repository_errors
+    def confirm_transfer(item_id: int, session_id: int) -> None:
+        """Flip a 'reserved' allocation to 'transferred' once the checklist
+        confirms the item as physically satisfied. Stock is already adjusted
+        separately by the checklist save's actual-quantity delta logic — this
+        only updates the ledger's status, not KitSpareStock."""
         with get_session() as session:
             session.execute(text("""
-                UPDATE calltrackers.KitItemCheck
-                SET acquired = :acq WHERE id = :cid
-            """), {"acq": acquired, "cid": check_id})
+                UPDATE calltrackers.KitItemAllocation
+                SET status = 'transferred', transferred_at = NOW()
+                WHERE item_id = :iid AND session_id = :sid AND status = 'reserved'
+            """), {"iid": item_id, "sid": session_id})
 
     # ── Shopping list ─────────────────────────────────────────────────────────
 
@@ -336,6 +398,11 @@ class KitMaintenanceRepository:
 
         Returns one row per (session, item) pair where quantity_needed > 0.
         Includes spare stock, order-tracking fields, and chosen supplier name.
+
+        quantity_needed is computed live (quantity-type: min_quantity minus
+        actual_quantity; unique-type: 1 if absent else 0) rather than trusting
+        the KitItemCheck.quantity_needed snapshot, and acquired is derived from
+        KitItemAllocation rather than the legacy flag.
         """
         with get_session() as session:
             return session.execute(text("""
@@ -345,7 +412,16 @@ class KitMaintenanceRepository:
                     k.name AS kit_name,
                     s.season, s.id AS session_id,
                     c.id AS check_id,
-                    c.quantity_needed, c.acquired, c.notes AS check_notes,
+                    CASE
+                        WHEN t.quantity_type = 'quantity'
+                            THEN GREATEST(0, t.min_quantity - COALESCE(c.actual_quantity, 0))
+                        ELSE (CASE WHEN c.present = 0 THEN 1 ELSE 0 END)
+                    END AS quantity_needed,
+                    EXISTS (
+                        SELECT 1 FROM calltrackers.KitItemAllocation alloc
+                        WHERE alloc.item_id = t.id AND alloc.session_id = s.id
+                    ) AS acquired,
+                    c.notes AS check_notes,
                     c.ordered_at, c.received_at, c.supplier_id,
                     COALESCE(ss.quantity, 0) AS spare_stock,
                     sup.name AS supplier_name
@@ -355,7 +431,13 @@ class KitMaintenanceRepository:
                 JOIN calltrackers.Kit k ON k.id = s.kit_id
                 LEFT JOIN calltrackers.KitSpareStock ss ON ss.item_id = t.id
                 LEFT JOIN calltrackers.KitSupplier sup ON sup.id = c.supplier_id
-                WHERE c.quantity_needed > 0
+                WHERE (
+                    CASE
+                        WHEN t.quantity_type = 'quantity'
+                            THEN GREATEST(0, t.min_quantity - COALESCE(c.actual_quantity, 0))
+                        ELSE (CASE WHEN c.present = 0 THEN 1 ELSE 0 END)
+                    END
+                ) > 0
                   AND s.status != 'released'
                 ORDER BY t.sort_order, k.name
             """)).mappings().all()
@@ -519,7 +601,14 @@ class KitMaintenanceRepository:
     @handle_repository_errors
     def get_all_spare_stock() -> List[Dict[str, Any]]:
         """All active template items with total stock, qty reserved for active kits,
-        and available count (total − reserved)."""
+        and available count (total − reserved).
+
+        qty_allocated sums only 'reserved' KitItemAllocation rows — once an
+        allocation is 'transferred', its quantity is already reflected in the
+        lower KitSpareStock.quantity itself (via the checklist's
+        actual-quantity delta logic), so counting it again here would
+        double-subtract it from the available count.
+        """
         with get_session() as session:
             return session.execute(text("""
                 SELECT
@@ -533,11 +622,11 @@ class KitMaintenanceRepository:
                 FROM calltrackers.KitItemTemplate t
                 LEFT JOIN calltrackers.KitSpareStock ss ON ss.item_id = t.id
                 LEFT JOIN (
-                    SELECT c.item_id, SUM(c.quantity_needed) AS qty_allocated
-                    FROM calltrackers.KitItemCheck c
-                    JOIN calltrackers.KitMaintenanceSession s ON s.id = c.session_id
-                    WHERE c.acquired = 1 AND s.status != 'released'
-                    GROUP BY c.item_id
+                    SELECT a.item_id, SUM(a.quantity) AS qty_allocated
+                    FROM calltrackers.KitItemAllocation a
+                    JOIN calltrackers.KitMaintenanceSession s ON s.id = a.session_id
+                    WHERE a.status = 'reserved' AND s.status != 'released'
+                    GROUP BY a.item_id
                 ) alloc ON alloc.item_id = t.id
                 WHERE t.active = 1
                 ORDER BY t.sort_order, t.id
@@ -554,12 +643,12 @@ class KitMaintenanceRepository:
                     COALESCE(alloc.qty_allocated, 0) AS qty_allocated
                 FROM calltrackers.KitSpareStock ss
                 LEFT JOIN (
-                    SELECT c.item_id, SUM(c.quantity_needed) AS qty_allocated
-                    FROM calltrackers.KitItemCheck c
-                    JOIN calltrackers.KitMaintenanceSession s ON s.id = c.session_id
-                    WHERE c.acquired = 1 AND s.status != 'released'
-                      AND c.item_id = :iid
-                    GROUP BY c.item_id
+                    SELECT a.item_id, SUM(a.quantity) AS qty_allocated
+                    FROM calltrackers.KitItemAllocation a
+                    JOIN calltrackers.KitMaintenanceSession s ON s.id = a.session_id
+                    WHERE a.status = 'reserved' AND s.status != 'released'
+                      AND a.item_id = :iid
+                    GROUP BY a.item_id
                 ) alloc ON alloc.item_id = ss.item_id
                 WHERE ss.item_id = :iid
             """), {"iid": item_id}).mappings().first()
@@ -617,10 +706,12 @@ class KitMaintenanceRepository:
         spare_stock is the *available* count (total minus already reserved for other
         active kits). Returns one row per (item, session/kit) pair.
 
-        quantity_needed is computed live from the template's current min_quantity
-        rather than trusting KitItemCheck.quantity_needed, which is only a snapshot
-        written at session start / checklist save and goes stale if an admin edits
-        the template's min_quantity while a session is still open.
+        quantity_needed is computed live (quantity-type: min_quantity minus
+        actual_quantity; unique-type: 1 if absent else 0 — quantity-type's
+        actual_quantity-based formula does not apply to unique items, which
+        track present/absent instead) rather than trusting the
+        KitItemCheck.quantity_needed snapshot. A session is excluded once it
+        already has any KitItemAllocation row (reserved or transferred).
         """
         with get_session() as session:
             return session.execute(text("""
@@ -630,22 +721,35 @@ class KitMaintenanceRepository:
                     k.id AS kit_id, k.name AS kit_name,
                     s.id AS session_id, s.season,
                     c.id AS check_id,
-                    GREATEST(0, t.min_quantity - COALESCE(c.actual_quantity, 0)) AS quantity_needed
+                    CASE
+                        WHEN t.quantity_type = 'quantity'
+                            THEN GREATEST(0, t.min_quantity - COALESCE(c.actual_quantity, 0))
+                        ELSE (CASE WHEN c.present = 0 THEN 1 ELSE 0 END)
+                    END AS quantity_needed
                 FROM calltrackers.KitSpareStock ss
                 JOIN calltrackers.KitItemTemplate t ON t.id = ss.item_id
                 JOIN calltrackers.KitItemCheck c ON c.item_id = t.id
                 JOIN calltrackers.KitMaintenanceSession s ON s.id = c.session_id
                 JOIN calltrackers.Kit k ON k.id = s.kit_id
                 LEFT JOIN (
-                    SELECT c2.item_id, SUM(c2.quantity_needed) AS qty_allocated
-                    FROM calltrackers.KitItemCheck c2
-                    JOIN calltrackers.KitMaintenanceSession s2 ON s2.id = c2.session_id
-                    WHERE c2.acquired = 1 AND s2.status != 'released'
-                    GROUP BY c2.item_id
+                    SELECT a.item_id, SUM(a.quantity) AS qty_allocated
+                    FROM calltrackers.KitItemAllocation a
+                    JOIN calltrackers.KitMaintenanceSession s2 ON s2.id = a.session_id
+                    WHERE a.status = 'reserved' AND s2.status != 'released'
+                    GROUP BY a.item_id
                 ) alloc ON alloc.item_id = ss.item_id
                 WHERE (ss.quantity - COALESCE(alloc.qty_allocated, 0)) > 0
-                  AND GREATEST(0, t.min_quantity - COALESCE(c.actual_quantity, 0)) > 0
-                  AND c.acquired = 0
+                  AND (
+                    CASE
+                        WHEN t.quantity_type = 'quantity'
+                            THEN GREATEST(0, t.min_quantity - COALESCE(c.actual_quantity, 0))
+                        ELSE (CASE WHEN c.present = 0 THEN 1 ELSE 0 END)
+                    END
+                  ) > 0
+                  AND NOT EXISTS (
+                        SELECT 1 FROM calltrackers.KitItemAllocation a2
+                        WHERE a2.item_id = t.id AND a2.session_id = s.id
+                  )
                   AND s.status != 'released'
                 ORDER BY t.sort_order, k.name
             """)).mappings().all()
@@ -656,13 +760,30 @@ class KitMaintenanceRepository:
         session_id: int,
         item_id: int,
         note: Optional[str],
+        quantity: int,
     ) -> None:
-        """Set acquired=1 on a KitItemCheck row and append an optional note."""
+        """Reserve *quantity* of *item_id* for *session_id* and append a note.
+
+        Creates (or refreshes the quantity of) a 'reserved' KitItemAllocation
+        row — replaces the old flag-flip on KitItemCheck.acquired.
+        """
         with get_session() as session:
+            existing = session.execute(text("""
+                SELECT id FROM calltrackers.KitItemAllocation
+                WHERE item_id = :iid AND session_id = :sid AND status = 'reserved'
+            """), {"iid": item_id, "sid": session_id}).first()
+            if existing:
+                session.execute(text("""
+                    UPDATE calltrackers.KitItemAllocation SET quantity = :qty WHERE id = :id
+                """), {"qty": quantity, "id": existing[0]})
+            else:
+                session.execute(text("""
+                    INSERT INTO calltrackers.KitItemAllocation (item_id, session_id, quantity, status)
+                    VALUES (:iid, :sid, :qty, 'reserved')
+                """), {"iid": item_id, "sid": session_id, "qty": quantity})
             session.execute(text("""
                 UPDATE calltrackers.KitItemCheck
-                SET acquired = 1,
-                    notes = CASE
+                SET notes = CASE
                         WHEN :note IS NULL THEN notes
                         WHEN notes IS NULL OR notes = '' THEN :note
                         ELSE CONCAT(notes, '; ', :note)
