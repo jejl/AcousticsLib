@@ -616,6 +616,11 @@ class KitMaintenanceRepository:
 
         spare_stock is the *available* count (total minus already reserved for other
         active kits). Returns one row per (item, session/kit) pair.
+
+        quantity_needed is computed live from the template's current min_quantity
+        rather than trusting KitItemCheck.quantity_needed, which is only a snapshot
+        written at session start / checklist save and goes stale if an admin edits
+        the template's min_quantity while a session is still open.
         """
         with get_session() as session:
             return session.execute(text("""
@@ -624,7 +629,8 @@ class KitMaintenanceRepository:
                     (ss.quantity - COALESCE(alloc.qty_allocated, 0)) AS spare_stock,
                     k.id AS kit_id, k.name AS kit_name,
                     s.id AS session_id, s.season,
-                    c.id AS check_id, c.quantity_needed
+                    c.id AS check_id,
+                    GREATEST(0, t.min_quantity - COALESCE(c.actual_quantity, 0)) AS quantity_needed
                 FROM calltrackers.KitSpareStock ss
                 JOIN calltrackers.KitItemTemplate t ON t.id = ss.item_id
                 JOIN calltrackers.KitItemCheck c ON c.item_id = t.id
@@ -638,7 +644,7 @@ class KitMaintenanceRepository:
                     GROUP BY c2.item_id
                 ) alloc ON alloc.item_id = ss.item_id
                 WHERE (ss.quantity - COALESCE(alloc.qty_allocated, 0)) > 0
-                  AND c.quantity_needed > 0
+                  AND GREATEST(0, t.min_quantity - COALESCE(c.actual_quantity, 0)) > 0
                   AND c.acquired = 0
                   AND s.status != 'released'
                 ORDER BY t.sort_order, k.name
