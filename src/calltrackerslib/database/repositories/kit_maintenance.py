@@ -409,7 +409,7 @@ class KitMaintenanceRepository:
                 SELECT
                     t.id AS item_id,
                     t.item_name, t.sort_order,
-                    k.name AS kit_name,
+                    k.id AS kit_id, k.name AS kit_name,
                     s.season, s.id AS session_id,
                     c.id AS check_id,
                     CASE
