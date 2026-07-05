@@ -57,8 +57,9 @@ class KitRepository:
         with get_session() as session:
             return session.execute(
                 text(
-                    "SELECT recorder.name AS Recorder_Name, "
+                    "SELECT recorder.id AS Recorder_ID, recorder.name AS Recorder_Name, "
                     "CONCAT(recorder.Manufacturer, ' ', recorder.Model) AS Model, "
+                    "kit.id AS Kit_ID, "
                     "CASE WHEN kit.name IS NOT NULL THEN kit.name ELSE 'Unassigned' END AS Kit_Name, "
                     "CASE WHEN kit.name IS NOT NULL THEN kit.label ELSE '- none -' END AS Kit_Label, "
                     "CASE "

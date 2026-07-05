@@ -1,6 +1,6 @@
 [project]
 name = "calltrackerslib"
-version = "0.10.0"
+version = "0.11.0"
 description = "CallTrackers shared library — audio I/O, database, geography, processing utilities"
 readme = "README.md"
 authors = [
