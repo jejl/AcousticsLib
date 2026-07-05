@@ -96,6 +96,26 @@ class SDCardRepository:
 
     @staticmethod
     @handle_repository_errors
+    def get_cards_for_recorder(recorder_id: int) -> List[Dict[str, Any]]:
+        """All SD cards currently assigned to this recorder.
+
+        A recorder may hold more than one card (e.g. a spare/backup) even
+        though only one is physically loaded at a time.
+        """
+        with get_session() as session:
+            return session.execute(
+                text(
+                    "SELECT sc.* "
+                    "FROM calltrackers.SDCards sc "
+                    "JOIN calltrackers.RecorderCard rc ON rc.id_card = sc.id "
+                    "WHERE rc.id_recorder = :recorder_id "
+                    "ORDER BY sc.name"
+                ),
+                {"recorder_id": recorder_id},
+            ).mappings().all()
+
+    @staticmethod
+    @handle_repository_errors
     def create(
         name: str,
         card_type: str,
