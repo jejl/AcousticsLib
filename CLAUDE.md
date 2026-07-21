@@ -75,7 +75,7 @@ from calltrackerslib.database.repositories import (
 ## Running tests
 
 ```bash
-cd /Users/jlovell/Library/CloudStorage/Dropbox/Projects/Shared/CallTrackersLib
+cd /Users/jlovell/Projects/CallTrackersLib
 .venv/bin/python -m pytest tests/ -q
 ```
 
@@ -93,6 +93,6 @@ Both CallTrackersAdmin and CallTrackersProcessing install this library via `uv` 
 
 ## Related projects
 
-- **CallTrackersAdmin** (`Dropbox/Projects/Current/CallTrackers/Software/CallTrackersAdmin`) — primary consumer; Streamlit web app
-- **CallTrackersProcessing** (`Dropbox/Projects/Current/CallTrackers/Software/CallTrackersProcessing`) — pipeline scripts; newer scripts use this lib, older ones use `db_utils.py` directly
-- **AcousticArrayLib** (`Dropbox/Projects/Current/RecorderPrototype/Software/AcousticArrayLib`) — independent; the `processing/` subpackage here (FFT, correlation, DOA) overlaps in domain but the two libraries are not yet integrated
+- **CallTrackersAdmin** (`~/Projects/CallTrackers/Software/CallTrackersAdmin`) — primary consumer; Streamlit web app
+- **CallTrackersProcessing** (`~/Projects/CallTrackers/Software/CallTrackersProcessing`) — pipeline scripts; newer scripts use this lib, older ones use `db_utils.py` directly
+- **AcousticArrayLib** (`~/Projects/RecorderPrototype/Software/AcousticArrayLib`) — independent; the `processing/` subpackage here (FFT, correlation, DOA) overlaps in domain but the two libraries are not yet integrated
