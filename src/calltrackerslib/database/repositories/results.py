@@ -18,6 +18,36 @@ def _get_table_allowlist() -> frozenset:
     return frozenset(r["results_table"] for r in ClassifierTypeRepository.get_all())
 
 
+# Column-name asymmetry across the results tables: ResultsBats scores its rows
+# in ``Probability``, every other table uses ``Score``.  These values ARE
+# interpolated into SQL, so this mapping is the only permitted source for them
+# and it is only ever keyed by an already-allowlisted table name.
+#
+# The eventual fix is a ``score_column`` on the ClassifierType table, which
+# would make this data rather than code — but that is a schema migration for a
+# cosmetic gain, so it has not been done.
+_SCORE_COLUMN: Dict[str, str] = {"ResultsBats": "Probability"}
+_DEFAULT_SCORE_COLUMN = "Score"
+_SPECIES_COLUMN = "English_Name"
+_NO_ID_SENTINEL = "No ID"
+
+# An unidentified detection is recorded inconsistently: ResultsBats writes
+# ``Species = 'No ID'`` but leaves ``English_Name`` as an EMPTY STRING, not
+# 'No ID'.  Filtering on the sentinel alone therefore lets 242k unidentified
+# bat rows through as a species whose name is ''.  Both forms must be excluded.
+_IDENTIFIED_SQL = (
+    f"r.`{_SPECIES_COLUMN}` IS NOT NULL "
+    f"AND TRIM(r.`{_SPECIES_COLUMN}`) <> '' "
+    f"AND r.`{_SPECIES_COLUMN}` <> :no_id "
+    f"AND (r.`Species` IS NULL OR r.`Species` <> :no_id)"
+)
+
+
+def _score_column(table_name: str) -> str:
+    """Return the score column for an ALREADY-ALLOWLISTED table name."""
+    return _SCORE_COLUMN.get(table_name, _DEFAULT_SCORE_COLUMN)
+
+
 class ResultsRepository:
     """Data access layer for classifier results tables."""
 
@@ -95,6 +125,97 @@ class ResultsRepository:
                 ),
                 {"obs_id": obs_id},
             ).mappings().all()
+
+    @staticmethod
+    @handle_repository_errors
+    def get_observation_ids_with_detections(
+        table_name: str,
+        min_score: Optional[float] = None,
+        species: Optional[str] = None,
+        exclude_no_id: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Return per-observation detection counts across the whole table.
+
+        This is the only cross-observation read in this repository — every
+        other method is scoped to a single ``observation_id``.  It exists so a
+        caller can ask "which observations have a qualifying detection?" in one
+        query rather than one query per observation.
+
+        Returns ``[{"observation_id": int, "n": int}, ...]`` for every
+        observation with at least one qualifying row.  Rows an import could not
+        match to a deployment carry ``observation_id = -1``; they are returned
+        like any other and simply fail to match a real LocationLog id.
+
+        Args:
+            table_name: Must be a registered results table (from ClassifierType).
+            min_score: Applied to ``Probability`` (ResultsBats) or ``Score``
+                (all others).  None means no score filtering.
+            species: Exact ``English_Name`` match, bound as a parameter.
+            exclude_no_id: Drop rows with no species identification — a blank
+                English_Name as well as the 'No ID' sentinel.  Ignored when
+                *species* is given, since that is already specific.
+        """
+        allowlist = _get_table_allowlist()
+        if table_name not in allowlist:
+            raise ValueError(
+                f"Table '{table_name}' is not in the allowed list: {allowlist}"
+            )
+
+        score_col = _score_column(table_name)   # literal, from a constant
+        clauses: List[str] = []
+        params: Dict[str, Any] = {}
+        if min_score is not None:
+            clauses.append(f"r.`{score_col}` >= :min_score")
+            params["min_score"] = min_score
+        if species:
+            clauses.append(f"r.`{_SPECIES_COLUMN}` = :species")
+            params["species"] = species
+        elif exclude_no_id:
+            clauses.append(f"({_IDENTIFIED_SQL})")
+            params["no_id"] = _NO_ID_SENTINEL
+
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        with get_session() as session:
+            rows = session.execute(
+                text(
+                    f"SELECT r.observation_id AS observation_id, COUNT(*) AS n "
+                    f"FROM calltrackers.`{table_name}` r "
+                    f"{where}"
+                    f"GROUP BY r.observation_id"
+                ),
+                params,
+            ).mappings().all()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    @handle_repository_errors
+    def get_distinct_species(table_name: str) -> List[Dict[str, Any]]:
+        """Return ``[{"species": str, "n": int}]`` ordered by frequency.
+
+        There is no species reference table anywhere in the schema — species
+        are free text written straight from the BTO CSV — so a species picker
+        has to be built from the data itself.  Unidentified rows are excluded.
+
+        Args:
+            table_name: Must be a registered results table (from ClassifierType).
+        """
+        allowlist = _get_table_allowlist()
+        if table_name not in allowlist:
+            raise ValueError(
+                f"Table '{table_name}' is not in the allowed list: {allowlist}"
+            )
+        with get_session() as session:
+            rows = session.execute(
+                text(
+                    f"SELECT r.`{_SPECIES_COLUMN}` AS species, COUNT(*) AS n "
+                    f"FROM calltrackers.`{table_name}` r "
+                    f"WHERE {_IDENTIFIED_SQL} "
+                    f"GROUP BY r.`{_SPECIES_COLUMN}` "
+                    f"ORDER BY n DESC"
+                ),
+                {"no_id": _NO_ID_SENTINEL},
+            ).mappings().all()
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------ #
     # Write                                                                #
